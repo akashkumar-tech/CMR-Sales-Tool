@@ -1,0 +1,47 @@
+{
+  "summary": "Rewrote backend test suite for Beet.Health OTP-auth build (backend_test.py, 30 tests). Backend: 29/30 passed. Frontend: exercised OTP login (Harry employee + Manager), employee scoping (no nav-all-leads / nav-team-performance), global search (Sarah found across teams), manager full-lead visibility, quick-add-lead duplicate detection banner for '+1 (415) 555-0101' normalizing to seeded lead. All critical flows working. One real backend permission bug found in owner-reassignment path.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PATCH /api/leads/{id}/assign (field=owner)",
+        "issue": "After manager reassigns owner from Harry -> Leo, Harry still has read/write access to the lead because create_lead defaults followup_assigned_to=owner and the /assign endpoint only updates the requested field. can_access_lead returns True for followup_assigned_to, so Harry retains access. Spec says 'afterwards Harry GET that lead => 403'. Either (a) cascade owner reassignment to followup_assigned_to/demo_owner when they equal the previous owner, or (b) exclude followup_assigned_to/demo_owner from access grants (but that contradicts other tests). Recommended: on owner reassignment, if followup_assigned_to==prev_owner then set it to new owner too (and same for demo_owner); record separate audit entries.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/request-otp",
+        "issue": "Rate-limit (5/10min) is per-email and blocks legitimate test/dev flows. Backend logs also show 'OTP for ... (emailed=False)' — email delivery not verified (OK for dev). Consider a small dev bypass or reset endpoint."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix owner-reassignment so revoking access from previous owner actually revokes access (cascade followup_assigned_to/demo_owner when they mirrored the old owner, OR redesign lead_scope/can_access_lead)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 909 lines — approaching size threshold; consider splitting auth/leads/options/tasks into modules.",
+    "create_lead defaults followup_assigned_to=owner but /leads/{id}/assign only updates the single field — this coupling causes the reassignment bug above.",
+    "Test suite: pytest.ini forces -n 2 --dist loadscope; suite ran with -n 0 to avoid OTP rate-limit collisions across workers. Consider seeding an OTP-bypass fixture or per-worker email pool.",
+    "OTP rate-limit test isn't covered; would be nice to add (429 after 5 requests).",
+    "Options endpoint POST/PATCH allow both admin and manager (require_manager) — spec says 'admin/manager can add/rename/archive', so aligned. But POST /options is listed under 'MANAGER-ONLY' rejection for employees — verified employees 403."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "96.7% (29/30)", "frontend": "100% of exercised flows"},
+  "test_credentials": "OTP dev-mode; POST /api/auth/request-otp returns dev_otp. Seeded: admin@beet.health, manager@beet.health, harry/leo/ben/emma@beet.health.",
+  "seed_data_creation": "None persistent; all TEST_-prefixed leads/options/tasks are cleaned up in-test. Backend seed remains untouched.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend suite in /app/backend/tests/backend_test.py rewritten for OTP flow with pymongo pre-clean of `otps` collection to bypass rate-limit. Run with `pytest -n 0` (or leave default -n 2 --dist loadscope; a couple of tests may 429 under parallel). Single failing test is TestAssignment::test_reassign_owner_changes_access — real permission bug (see action_items).",
+  "rca of the issue": "TestAssignment failure RCA: manager creates lead with owner=Harry. Backend create_lead sets doc['followup_assigned_to'] = body.followup_assigned_to or owner => Harry. Manager PATCH /leads/{id}/assign {field:'owner', user_id: Leo} updates only 'owner' field. Now owner=Leo, followup_assigned_to=Harry. can_access_lead(user, lead) returns True if uid in (owner, added_by, followup_assigned_to, demo_owner) — Harry still matches via followup_assigned_to => GET returns 200 instead of 403. Mitigation: in assign_lead when field=='owner', additionally sync followup_assigned_to/demo_owner if they equal prev owner; or explicitly reassign all three."
+}

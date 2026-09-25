@@ -1,0 +1,219 @@
+{
+  "project_name": "PulseCRM - Modern Clinical & Practice Sales Management System",
+  "app_type": "hybrid_fullstack (dense SaaS sales CRM & pipeline management)",
+  "design_philosophy": {
+    "persona": "E1: Top 1% Creative Designer. Precision architectural layout meets high-contrast tactile Swiss editorial ergonomics, tuned specifically for fast-paced junior reps and focused sales managers.",
+    "theme": "Light mode default with warm crisp slate-stone neutrals (#FAFAF9 / #FFFFFF) and deep ink navy (#0F172A) anchors, supplemented by calibrated status tokens and clean dark mode toggling.",
+    "emotional_tone": "Intern-friendly, snappy, trustworthy, zero visual clutter, high information clarity, immediate task-to-action conversion."
+  },
+  "typography": {
+    "font_family_headings": "'Plus Jakarta Sans', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif",
+    "font_family_body": "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+    "font_family_mono": "'JetBrains Mono', 'Fira Code', Menlo, monospace",
+    "google_font_url": "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap",
+    "scale": {
+      "h1": "text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white",
+      "h3": "text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-white",
+      "h4": "text-lg sm:text-xl font-semibold text-slate-800 dark:text-slate-100",
+      "body": "text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed",
+      "small": "text-xs font-medium text-slate-500 dark:text-slate-400",
+      "overline": "text-[11px] font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"
+    },
+    "forbidden_fonts": [
+      "Inter for headers",
+      "Space Grotesk",
+      "Comic Sans",
+      "Brush Script"
+    ]
+  },
+  "colors": {
+    "base": {
+      "canvas": "#F8FAFC",
+      "canvas_card": "#FFFFFF",
+      "canvas_card_muted": "#F1F5F9",
+      "canvas_dark": "#0B0F17",
+      "card_dark": "#111827",
+      "border_light": "#E2E8F0",
+      "border_dark": "#1F2937",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#94A3B8"
+    },
+    "brand_accents": {
+      "primary": "#4F46E5",
+      "primary_hover": "#4338CA",
+      "primary_subtle": "#EEF2FF",
+      "secondary_accent": "#0D9488",
+      "destructive": "#E11D48",
+      "destructive_subtle": "#FFE4E6"
+    },
+    "stage_badges": {
+      "New Lead": { "bg": "bg-slate-100 dark:bg-slate-800", "text": "text-slate-800 dark:text-slate-200", "border": "border-slate-300 dark:border-slate-700" },
+      "Contacted": { "bg": "bg-sky-50 dark:bg-sky-950/40", "text": "text-sky-700 dark:text-sky-300", "border": "border-sky-200 dark:border-sky-800" },
+      "Replied": { "bg": "bg-blue-50 dark:bg-blue-950/40", "text": "text-blue-700 dark:text-blue-300", "border": "border-blue-200 dark:border-blue-800" },
+      "Interested": { "bg": "bg-amber-50 dark:bg-amber-950/40", "text": "text-amber-700 dark:text-amber-300", "border": "border-amber-200 dark:border-amber-800" },
+      "Demo Booked": { "bg": "bg-purple-50 dark:bg-purple-950/40", "text": "text-purple-700 dark:text-purple-300", "border": "border-purple-200 dark:border-purple-800" },
+      "Demo Completed": { "bg": "bg-indigo-50 dark:bg-indigo-950/40", "text": "text-indigo-700 dark:text-indigo-300", "border": "border-indigo-200 dark:border-indigo-800" },
+      "Trial": { "bg": "bg-teal-50 dark:bg-teal-950/40", "text": "text-teal-700 dark:text-teal-300", "border": "border-teal-200 dark:border-teal-800" },
+      "Pricing Shared": { "bg": "bg-violet-50 dark:bg-violet-950/40", "text": "text-violet-700 dark:text-violet-300", "border": "border-violet-200 dark:border-violet-800" },
+      "Follow-up": { "bg": "bg-orange-50 dark:bg-orange-950/40", "text": "text-orange-700 dark:text-orange-300", "border": "border-orange-200 dark:border-orange-800" },
+      "Converted": { "bg": "bg-emerald-50 dark:bg-emerald-950/40", "text": "text-emerald-700 dark:text-emerald-300", "border": "border-emerald-200 dark:border-emerald-800" },
+      "Not Interested": { "bg": "bg-rose-50 dark:bg-rose-950/40", "text": "text-rose-700 dark:text-rose-300", "border": "border-rose-200 dark:border-rose-800" },
+      "No Response": { "bg": "bg-zinc-100 dark:bg-zinc-800", "text": "text-zinc-600 dark:text-zinc-400", "border": "border-zinc-300 dark:border-zinc-700" }
+    },
+    "channel_accents": {
+      "whatsapp": "#25D366",
+      "instagram": "#E1306C",
+      "email": "#3B82F6",
+      "call": "#10B981"
+    },
+    "forbidden_colors": [
+      "#7351B7",
+      "#1B93A4"
+    ]
+  },
+  "layout_and_navigation": {
+    "structure": "Sidebar + Sticky App Header + Responsive Sub-header with Global Search & User Switcher + Content Scroll Container",
+    "sidebar": {
+      "width": "w-64",
+      "background": "bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800",
+      "navigation_items": [
+        { "name": "Dashboard", "path": "/dashboard", "icon": "LayoutDashboard", "testid": "nav-dashboard" },
+        { "name": "My Leads", "path": "/my-leads", "icon": "Users", "testid": "nav-my-leads" },
+        { "name": "All Leads", "path": "/all-leads", "icon": "Building2", "testid": "nav-all-leads", "manager_only": true },
+        { "name": "Kanban", "path": "/kanban", "icon": "Kanban", "testid": "nav-kanban" },
+        { "name": "Tasks", "path": "/tasks", "icon": "CheckSquare", "testid": "nav-tasks" },
+        { "name": "Activities", "path": "/activities", "icon": "Activity", "testid": "nav-activities" },
+        { "name": "Demos", "path": "/demos", "icon": "Calendar", "testid": "nav-demos" },
+        { "name": "Team Performance", "path": "/team-performance", "icon": "BarChart3", "testid": "nav-team-performance", "manager_only": true },
+        { "name": "Reports", "path": "/reports", "icon": "PieChart", "testid": "nav-reports" },
+        { "name": "Settings", "path": "/settings", "icon": "Settings", "testid": "nav-settings" }
+      ]
+    },
+    "top_header": {
+      "height": "h-16",
+      "glassmorphism": "backdrop-blur-md bg-white/90 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 z-40 sticky top-0",
+      "features": [
+        "Global quick search bar (Cmd+K) with instant modal drilldown",
+        "Role indicator & quick switcher (Manager vs Harry, Leo, Ben, Emma) for seamless testing & real multi-user simulation",
+        "Quick Action button: '+ New Lead' (opens modal with duplicate phone/email detection)",
+        "Notification bell with pending task count pill",
+        "Dark/Light theme toggle"
+      ]
+    }
+  },
+  "components_blueprint": {
+    "kanban_board": {
+      "type": "Drag-and-Drop and Click-to-Move Pipeline",
+      "stages_count": 12,
+      "style": "Horizontal scrollable track with compact, rich prospect cards, stage counters, conversion value indicator, and column drop zones.",
+      "card_contents": [
+        "Prospect name and clinic/practice",
+        "Assigned team member avatar",
+        "Contact chips (WhatsApp, Call, IG, Email)",
+        "Next follow-up date with urgency indicator (Overdue in red, Today in amber)",
+        "Last activity badge and lead response snippet"
+      ]
+    },
+    "lead_detail_modal": {
+      "type": "Slide-over drawer or split modal",
+      "tabs": [
+        "Overview & Contact Info",
+        "Activity Log & Timeline (Calls, WhatsApp, IG, Emails)",
+        "Tasks & Follow-ups",
+        "Demo Details & Outcomes",
+        "Internal Notes"
+      ],
+      "actions": [
+        "Log Outreach (Call, WhatsApp, IG, Email) with quick-reply templates",
+        "Schedule Next Follow-up or Demo",
+        "Change Stage dropdown",
+        "Mark as Converted or Archive"
+      ]
+    },
+    "task_manager": {
+      "tabs": ["My Tasks", "Due Today", "Overdue", "Upcoming", "Completed"],
+      "filters": ["Priority", "Assigned Lead", "Task Type (Call, WhatsApp, Demo Prep, Proposal)"],
+      "quick_complete": "Checkbox with micro-strikeout animation and immediate activity feed emission"
+    },
+    "team_performance_dashboard": {
+      "philosophy": "Collaborative Growth, No Toxic Leaderboard Ranking. Celebrates achievements and pipeline flow.",
+      "time_filters": ["Today", "This Week", "This Month", "Custom Range"],
+      "employee_cards": [
+        "Harry (Sales & Clinic Partnerships)",
+        "Leo (Outreach & Instagram Prospecting)",
+        "Ben (Demos & Practice Onboarding)",
+        "Emma (Client Success & Account Conversion)"
+      ],
+      "metrics_per_rep": [
+        "Outreach completed (Calls, WhatsApp, IG)",
+        "Demos booked vs completed",
+        "Pipeline value & conversions",
+        "Follow-up adherence rate (%)"
+      ]
+    },
+    "reports_and_analytics": {
+      "charts": [
+        "Leads distribution across 12 pipeline stages (Bar/Funnel)",
+        "Outreach activity breakdown by channel (Call, WhatsApp, IG, Email - Stacked Area / Bar)",
+        "Lead sources breakdown (Instagram, Referrals, Website, Cold Outreach, Clinic Directory - Donut Chart)",
+        "Monthly conversion trajectory"
+      ]
+    },
+    "settings_and_admin": {
+      "features": [
+        "Manage Team Members (Harry, Leo, Ben, Emma, Admin/Manager)",
+        "Permissions matrix view (Demonstrates strict employee privacy where reps only view assigned prospects)",
+        "Data Export: Full Prospects CSV export with one-click trigger",
+        "Duplicate check sensitivity settings (Phone / Email / Clinic Name)"
+      ]
+    }
+  },
+  "motion_and_micro_interactions": {
+    "card_hover": "transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-md",
+    "drag_state": "opacity-60 scale-[0.98] ring-2 ring-indigo-500 rounded-xl",
+    "drawer_transition": "framer-motion slide in from right with backdrop blur",
+    "badge_animations": "soft pulse for 'Due Today' and 'Urgent Overdue' items"
+  },
+  "image_urls": {
+    "team_portraits": {
+      "category": "team_members",
+      "url": "https://images.unsplash.com/photo-1758691736975-9f7f643d178e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwxfHxzYWxlcyUyMHRlYW0lMjBwb3J0cmFpdCUyMGRpdmVyc2V8ZW58MHx8fHwxNzkwMDU1MjYyfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Diverse group of sales & customer success professionals for user avatars and team workspace banner"
+    },
+    "healthcare_clinic_scene": {
+      "category": "client_context",
+      "url": "https://images.pexels.com/photos/4269274/pexels-photo-4269274.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Modern medical and clinic reception setting representing target healthcare prospects"
+    },
+    "clinic_consultation": {
+      "category": "demo_and_client",
+      "url": "https://images.pexels.com/photos/6809658/pexels-photo-6809658.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Clinic director consulting on digital solutions for demo cards and lead previews"
+    }
+  },
+  "testing_attributes_contract": {
+    "rule": "Every button, input, tab, nav-link, lead row, kanban card, metric card, and modal action MUST carry a distinctive 'data-testid' attribute.",
+    "samples": [
+      "data-testid='user-role-selector'",
+      "data-testid='quick-add-lead-btn'",
+      "data-testid='lead-search-input'",
+      "data-testid='kanban-column-demo-booked'",
+      "data-testid='lead-card-101'",
+      "data-testid='log-outreach-whatsapp-btn'",
+      "data-testid='task-checkbox-task-12'",
+      "data-testid='export-csv-btn'",
+      "data-testid='duplicate-warning-banner'"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "1. Strict permission enforcement: Harry, Leo, Ben, Emma must only view leads assigned to them under 'My Leads' and 'Dashboard', while Manager/Admin sees 'All Leads' and full team aggregates.",
+    "2. Include an intuitive Role Switcher in the top navigation bar so anyone evaluating the app can immediately toggle between Manager (Admin), Harry, Leo, Ben, and Emma to inspect permissions and tailored workspaces.",
+    "3. Implement the full 12-stage Kanban pipeline with drag and drop, quick move buttons, and column filters.",
+    "4. Add proactive duplicate detection on lead creation (warns immediately if phone or email already exists).",
+    "5. Populate realistic initial prospects with clinic/practice names (e.g., 'Aura Dental Clinic', 'Apex Physio & Wellness', 'St. Jude Dermatology', 'Harbor Health Partners') with rich multichannel activity histories.",
+    "6. Make sure Sonner toast notifications are used for actions like adding leads, moving stages, logging calls, and completing tasks.",
+    "7. Maintain crisp contrast with WCAG-compliant text colors, generous padding, and no transparent modal or dropdown backgrounds."
+  ]
+}

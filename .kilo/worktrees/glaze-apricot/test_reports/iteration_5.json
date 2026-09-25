@@ -1,0 +1,38 @@
+{
+  "summary": "Phase 1 workflow (handover, unified timeline, in-app notifications, concurrent-edit protection via expected_version, reasons enforcement, task lifecycle) tested end-to-end. Created /app/backend/tests/test_phase1_workflow.py with 15 focused tests — 15/15 PASSED (handover creates task+notification+assignment+ownership update; owner reassign records audit; employee cannot reassign owner; timeline returns human-readable chronological events across activity/handover/change kinds sorted desc; PUT /leads/{id} with stale expected_version returns 409 with detail.conflict=true, matching version bumps version by 1; notifications unread-count + per-user scoping + read + read-all; completing a handover task notifies the assigner and adds a completion event to the lead timeline; Not Interested / Lost require lost_reason; employee still 403 on /performance/team and /audit; unapproved emails still 403 on request-otp; manager users list returns all active roles incl. employee/intern — regression against legacy 'member' role passes). Frontend Playwright verified: OTP login (paripsa manager, priya/arjun employees), notification-bell + notification-count in header, lead drawer opens on NAME cell click, tab-timeline renders lead-timeline container, drawer-handover-btn opens dialog exposing handover-responsibility/assignee/due-date/priority/note/submit-btn, drawer-status-select → picking 'Not Interested' opens lost-reason-modal with confirm-lost-btn DISABLED until a reason is chosen, notification dropdown shows mark-all-read-btn and per-item notification-<id> entries and unread count persists after refresh, Tasks page shows task-status-<id>/task-row-<id>, add-task-btn opens New Task dialog whose task-assignee-select lists 5 active team members across manager/employee/intern (regression: previously empty due to legacy role 'member' — now fixed). Branding: header shows bell, primary buttons and active nav use pink/coral accent, no console errors beyond benign Radix a11y warnings about missing DialogTitle/Description on some dialogs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Tasks / New Task dialog", "issues": ["'Due Date' and 'Due Time' use native <input type=date/time> (browser default pickers) instead of the shadcn Calendar/TimePicker components — inconsistent with the rest of the Beet.Health design system."]},
+      {"screen": "Radix Dialogs (handover / lost-reason / new-task)", "issues": ["Console emits 'DialogContent requires a DialogTitle for accessibility' and 'Missing Description or aria-describedby' warnings on several dialogs — add DialogTitle (VisuallyHidden if needed) and aria-describedby for a11y."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase1_workflow.py",
+    "/app/backend/tests/test_iteration4_manager_login.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/phase1.xml"
+  ],
+  "action_items": [
+    "(Optional) Backfill an audit 'create' event for demo-seeded leads (seed_demo.py) so that a fresh lead's Timeline tab is not empty for demos — today it shows 'No activity yet.' until first activity/handover/change happens because seed inserts leads directly without an audit trail. Not a code bug; the real POST /leads path DOES audit 'create'.",
+    "(Design) Replace native date/time inputs in Tasks New Task dialog and other forms with shadcn Calendar / TimePicker for consistency.",
+    "(A11y) Add DialogTitle + aria-describedby to Handover/LostReason/NewTask dialogs to silence Radix warnings and improve screen-reader UX."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~1360 lines — recommend modularizing (auth, leads, handover/timeline, notifications, tasks, options, imports, reminders) before Phase 2.",
+    "handover() writes ownership fields BEFORE checking if the assignee is the current user; it also skips email but still writes an in-app notification for self-handover — consider skipping self-notification too.",
+    "OTP_DEV_MODE=true still exposes dev_otp in the /api/auth/request-otp response and on the login screen — MUST be disabled before production; guard the response field behind the env flag as an extra safety net.",
+    "Timeline endpoint filters out reassign audit rows to avoid duplication with assignments collection — good — but stage 'requires_reason' change events still don't surface the actual reason in the timeline text (currently only 'changed status from X to Y'). Consider appending '(reason: <lost_reason>)'.",
+    "seed_demo.py force-activates seeded users on every run — if an admin later demotes/deactivates one, the next seed silently re-enables them (documented in prior review, still not addressed)."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase1_workflow.py"],
+  "success_rate": {"backend": "100% (15/15 phase1 + prior suites unaffected)", "frontend": "100% of Phase 1 flows exercised"},
+  "test_credentials": "OTP dev-mode via POST /api/auth/request-otp -> dev_otp. Manager paripsa.tripathi@beet.health; Employees priya@beet.health, arjun@beet.health; Intern neha@beet.health; Admin admin@beet.health.",
+  "seed_data_creation": "Reused prior seed (python /app/backend/seed_demo.py); tests create/delete their own TEST_ leads for isolation.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Three backend test files coexist: backend_test.py (42 legacy tests using manager@/harry@/leo@ seed), test_iteration4_manager_login.py (13 tests for paripsa seed) and test_phase1_workflow.py (15 tests for handover/timeline/notifications/version/reasons). Run with pytest -n 0 to avoid OTP rate-limit collisions (pytest.ini uses -n 2 loadscope which also works because tests preclear otps). Notification dropdown lives inside a Radix portal — use [data-testid=notification-bell] to open then query [data-testid=mark-all-read-btn]. Reason modal opens as a nested Radix dialog when a requires_reason stage is selected in drawer-status-select; confirm-lost-btn is disabled until a reason is picked. To reach the drawer in All Leads, click the FIRST cell of the row (lead name) — clicking elsewhere is a no-op by design.",
+  "rca of the issue": "N/A — no failures. All Phase 1 acceptance criteria satisfied. Only cosmetic / a11y follow-ups (native date pickers, missing DialogTitle) and an optional seed enhancement for a non-empty Timeline on fresh demo leads."
+}

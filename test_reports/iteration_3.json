@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 3 backend + frontend testing for Beet.Health CRM (reminders, custom fields, clickable metrics, tracker import). Extended /app/backend/tests/backend_test.py from 30 -> 42 tests covering all new endpoints. Result: 42/42 pytest PASSED. Frontend: verified admin dashboard clickable tiles (stat-conversions -> /all-leads?status=Converted; stat-overdue -> /all-leads?follow_up=overdue), Settings tabs (settings-tab-custom adds a dropdown custom field, settings-tab-import parses CSV and shows import-summary), send-reminders-btn works for admin and is hidden for Harry (employee). New Lead dialog renders the custom-field-* inputs including the newly created field. All flows functional; the earlier iteration_2 owner-reassignment fix now passes (cascade of followup_assigned_to on owner change).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/request-otp", "issue": "5/10min per-email rate limit still active; test suite pre-clears otps collection via pymongo to avoid 429 during parallel runs."},
+      {"endpoint": "POST /api/reminders/run", "issue": "Runs synchronously and iterates all active users -> could be slow with large teams; consider a background task / batching."},
+      {"endpoint": "POST /api/import/commit", "issue": "Duplicate check inside loop uses find_one per row (N queries); acceptable for spec limit of 2000 rows but could be bulk-normalized. Also does not stream a progress signal."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1104 lines — over the 700-line guideline. Split into modules: auth.py, leads.py, options_and_cf.py, imports.py, reminders.py, tasks_and_activities.py.",
+    "import_commit performs a Mongo find_one per row inside a for loop; batch pre-fetch of existing normalized_phone/normalized_email would be more efficient for large trackers.",
+    "reminder_scheduler() uses raw asyncio loop; if backend restarts twice a minute during dev it can double-fire on the same day. Adding a last_reminder timestamp guard would be safer (already tracked in db.system).",
+    "CustomFieldIn.type is a free-form string — should be validated against the fixed TYPES enum to prevent bad data.",
+    "list_leads filter for follow_up=upcoming does not respect status closed exclusion; overdue also does not exclude closed statuses — could inflate 'overdue follow-ups' tile counts by counting closed leads with a stale next_follow_up. build_user_followups() correctly excludes closed statuses but the /api/leads?follow_up=overdue filter does not."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (42/42)", "frontend": "100% of exercised flows"},
+  "test_credentials": "OTP dev-mode; POST /api/auth/request-otp returns dev_otp. Seeded: admin@beet.health, manager@beet.health, harry/leo/ben/emma@beet.health.",
+  "seed_data_creation": "None persistent; all TEST_-prefixed leads / custom fields / options / tasks are cleaned up in-test. TEST_UI_* rows created during Playwright run were removed via mongo cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "backend_test.py now covers reminders, custom fields, follow_up filter, and tracker import in addition to iteration_1/2 flows. Run with `pytest -n 0` to avoid OTP rate-limit collisions (pytest.ini defaults to -n 2 loadscope which mostly works because fixtures re-clear otps per email). For the file-upload Playwright step, note that the import-file-input is intentionally hidden; use `page.locator(...).set_input_files(...)` and avoid wait_for_selector visible on it.",
+  "rca of the issue": "No new blocker bugs. Only note: /api/leads?follow_up=overdue does not filter out closed statuses, so it can differ slightly from the personalized reminders view. Not a spec violation for this iteration but flagged for review."
+}

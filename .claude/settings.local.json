@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($s = \"C:\\\\Users\\\\DELL\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-DELL-Downloads-memory-archive\\\\b0a4550d-b591-4b43-9965-bcf10c086286\\\\scratchpad\"; $env:PLAYWRIGHT_BROWSERS_PATH = \"$s\\\\pw-browsers\"; & \"$s\\\\venv\\\\Scripts\\\\python.exe\" \"$s\\\\check_report.py\")"
+    ]
+  }
+}

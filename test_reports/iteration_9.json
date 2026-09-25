@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration-9 verified the new Reports & Sales Funnel feature end-to-end. Backend: 14/14 pytest cases pass covering (a) GET /api/reports for period=day|week|month|quarter|year — each returns 200 with sales{leads,outreach,responses,demos,trials,follow_ups,invoices,payments,conversions,losses} all ints, funnel of 9 stages in the exact order New Lead->Contacted->Interested->Demo->Trial->Pricing->Invoice->Payment->Converted with monotonic non-increasing counts and pct computed against the first stage; (b) period=custom&start&end filters leads by created_at (narrow 1999-01-01/02 range yields zeros); (c) manager employee=<priyaId> restricts to Priya-owned leads (leads<=all), by_employee<=1; team=Sales filter works; (d) employee (priya) calling /api/reports gets lead_scope-based numbers with by_employee=[] AND CANNOT widen scope by passing employee=<manager_id>&team=Sales (result identical to self-scope); (e) sales totals are consistent with by_stage (demos = Demo Booked + Demo Completed, conversions=Converted, invoices=Invoice Raised, payments=Paid, trials=Trial, leads=sum(by_stage)); (f) regression by_stage/by_source/by_channel/by_employee/daily still present. Frontend Playwright (auth via API token in localStorage): manager sees reports-period-select + reports-team-select + reports-employee-select, sales-stats with all 10 stat cards (stat-sales-leads/outreach/responses/demos/trials/followups/invoices/payments/conversions/losses), sales-funnel with 9 bars (funnel-New-Lead...funnel-Converted), plus regression chart-by-stage/source/channel/employee/daily. Custom period reveals reports-start & reports-end date inputs. Drill-downs work: stat-sales-demos -> /all-leads?status=Demo%20Booked, stat-sales-conversions -> status=Converted, stat-sales-losses -> status=Lost; funnel-Demo -> status=Demo%20Booked. Employee (priya) sees reports page but reports-team-select and reports-employee-select are hidden (count=0); nav-reports=1; drill-down goes to /my-leads?status=... as expected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9_reports.py",
+    "/app/test_reports/pytest/iteration9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "reports() uses lead_scope() for employees which is broader (owner OR followup_assigned_to OR demo_owner) than the manager's ?employee= filter (owner only). This is by design and matches the spec, but note the two paths therefore return different totals for the same person. If product wants them to match, unify by using the same $or filter when manager passes employee=<id>.",
+    "reports() reads up to 8000 leads/activities into memory then aggregates in Python — will not scale past ~10k. Move counting into MongoDB $group aggregation and add indexes on leads(owner, status, created_at, archived) and activities(employee_id, timestamp).",
+    "Frontend Reports.jsx uses useAutoRefresh(load, 12000) — a 12 s poll runs even when the tab is backgrounded/idle; consider pausing on document.hidden to save API load.",
+    "FUNNEL_STATUS maps 'Payment' -> 'Paid' only, so the Payment funnel bar's drill-down excludes 'Payment Pending' leads counted in the same bar. Either drill to a multi-status view or split the funnel bar.",
+    "server.py is 1677 lines — still worth splitting into routers (carry-over from iteration-8)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9_reports.py (new)",
+    "/app/test_reports/pytest/iteration9_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% of targeted iteration-9 testids and drill-down routes verified"},
+  "test_credentials": "OTP dev-mode. Manager: paripsa.tripathi@beet.health. Employee: priya@beet.health. Admin: admin@beet.health. dev_otp returned by POST /api/auth/request-otp. Frontend token stored in localStorage key `beet_token` (user in `beet_user`).",
+  "seed_data_creation": "None. Used demo seed as-is.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `mongosh test_database --eval 'db.otps.deleteMany({})'` before starting to avoid OTP rate limits. Bypass UI OTP with API login: POST /api/auth/request-otp -> dev_otp, POST /api/auth/verify-otp -> token, then localStorage.setItem('beet_token', token) and 'beet_user' as JSON before navigating. Reports funnel stage testids replace whitespace with '-' (e.g. funnel-New-Lead). FUNNEL_STATUS maps Payment->Paid for drill-down (nuance noted in code review). Note lead_scope for employees is (owner OR followup OR demo_owner), which is a superset of manager's ?employee=<id> (owner-only) filter — asserting equality between the two will fail.",
+  "rca of the issue": "No functional bugs found for iteration-9. One test assertion was initially too strict (assumed employee self-scope == manager ?employee=<self> filter); corrected to >= because employee lead_scope is a superset (owner OR followup_assigned_to OR demo_owner). All 14 backend tests + all frontend testids/drill-downs pass on real seeded data."
+}

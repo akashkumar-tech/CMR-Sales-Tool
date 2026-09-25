@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 4 verifies the fix for Manager login bug — seeded Manager account paripsa.tripathi@beet.health with a Sales demo team (priya/arjun/neha) and 8 leads. Backend: created /app/backend/tests/test_iteration4_manager_login.py with 13 focused tests covering OTP login, role=manager, full visibility (leads/performance/teams/users/audit/reports), add-employee + duplicate employee_id 400, /leads/{id}/assign + /reassign-preview, and security gates (unapproved email 403, employee role=employee, employee 403 on manager endpoints). Result: 13/13 PASSED. Frontend: Playwright verified full OTP login flow using send-otp-btn -> Dev mode code (amber box) -> otp-input -> verify-otp-btn -> /dashboard showing 'Welcome back, Paripsa Tripathi' and all 9 sidebar items. Also verified employee (priya) RBAC redirects from /all-leads and /team-performance back to /dashboard. All fix expectations met; security gates still enforced.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4_manager_login.py",
+    "/app/backend/tests/backend_test.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is still ~1100+ lines — recommend modularizing (auth, users, leads, options, imports, reminders).",
+    "OTP_DEV_MODE=true is intentional for this preview but MUST be flipped off (and dev_otp response field guarded) before any production deploy — otherwise anyone knowing an approved email can log in.",
+    "seed_demo.py forces role/active/team on every run for existing emails; if an admin later demotes/deactivates a seeded user, re-running seed silently re-promotes them. Consider only re-activating on explicit flag."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration4_manager_login.py"],
+  "success_rate": {"backend": "100% (13/13 new + 42/42 prior)", "frontend": "100% of exercised flows"},
+  "test_credentials": "OTP dev-mode via /api/auth/request-otp -> dev_otp. Manager: paripsa.tripathi@beet.health. Employees: priya@, arjun@ (employees), neha@ (intern). Admin: admin@beet.health.",
+  "seed_data_creation": "Seed already applied by main agent via /app/backend/seed_demo.py. Tests self-clean TEST_ users via patch active=false.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Two backend test files now live: backend_test.py (42 tests, uses manager@beet.health / harry etc from the older seed) and test_iteration4_manager_login.py (13 tests, uses paripsa/priya/arjun/neha). Both seeds coexist in DB. Run with `pytest -n 0` to avoid xdist OTP rate-limit collisions or rely on pytest.ini (-n 2 loadscope).",
+  "rca of the issue": "Root cause: the CRM had only admin@beet.health seeded, so any Manager user could not request an OTP (approved-user gate returned 403). No code bug — pure data seeding gap. Fix: idempotent seed_demo.py inserts an approved active Manager (Paripsa Tripathi) + demo team + sample leads. Verified: request-otp+verify-otp for paripsa returns role='manager', frontend redirects to /dashboard with Manager sidebar, and non-approved emails still get 403."
+}

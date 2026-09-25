@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration-8 gap-closure verified end-to-end. Backend: 18/18 pytest cases pass covering (a) hard reason enforcement on PATCH /leads/{id}/stage AND PUT /leads/{id} — rejects '', ' ', '-', 'N/A', <3 chars with 400+requires_reason; rejects 'Other' without/short lost_notes; accepts real reason (200); (b) payment 'Not Paid' requires payment_reason (400, detail.field='payment') and persists invoice_owner/payment_owner/invoice_amount/invoice_date/payment_date; (c) status change audit/timeline captures reason text and updated_by/updated_by_name stored; (d) PATCH /leads/{id}/archive toggles archived; default list hides archived; ?archived=true reveals; (e) /leads/search?q=<id> and /leads?search=<id> both match by full lead id; (f) sort=name asc & sort=updated_at return sorted results without error; (g) 'Other' stage present in options; (h) /reassign-preview returns open_count,total_count,open_tasks,upcoming_demos,open_follow_ups; (i) RBAC — employee 403 on /performance/team, /audit, /workload; (j) named workflow — manager assigning followup_assigned_to=priya makes lead appear in employee scope and timeline captures events. Frontend (Playwright via API-issued JWT): manager sees nav-all-leads/nav-followups/nav-workload/nav-team-performance; show-archived-toggle (1) and action-archive-<id> render in All Leads; LeadDrawer opens with drawer-status-select and Demo tab exposes drawer-invoice-amount + Invoice/Payment Date + Invoice Owner; employee (priya) has nav-followups + all 4 followup-view-* tabs (today/upcoming/overdue/all) and does NOT see nav-all-leads/nav-workload/nav-team-performance; navigating to /workload as employee redirects to /dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "LeadDrawer Demo tab", "issues": ["Invoice Date, Payment Date, Demo Date still use native browser <input type='date'> (mm/dd/yyyy) instead of the shadcn Calendar/Popover pattern used elsewhere — inconsistent with the app design system (unchanged from iteration_7)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_gap_closure.py",
+    "/app/test_reports/pytest/iteration8_results.xml"
+  ],
+  "action_items": [
+    "MIGRATION: DEFAULT_OPTIONS now includes ('Other', False) for the stage type but startup seeding only runs when the options collection is empty for a type. In this preview DB, the 'Other' stage was missing from options and had to be inserted manually to pass the option-list assertion. Ship a one-shot seed patch that upserts missing DEFAULT_OPTIONS labels on startup (or add a migration in seed_demo.py) so fresh deployments and existing DBs both expose 'Other'.",
+    "DOC: /app/memory/test_credentials.md still lists Arjun & Neha under 'Demo team' — the simplified 3-user seed only creates admin/paripsa/priya. Update the doc to match seed_demo.py."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1611 lines — split into routers (auth, leads, demo, calendar, workload, notifications, options) for maintainability.",
+    "Startup option seeding uses `count_documents({type:typ}) == 0` — additions to DEFAULT_OPTIONS (e.g. new 'Other' stage) will never propagate to existing databases; use an upsert-per-label pattern instead.",
+    "Date inputs in DemoScheduleDialog, DemoCompleteDialog and LeadDrawer Demo tab (Invoice Date, Payment Date) rely on native <input type='date'> — switch to the shadcn Calendar/Popover already used elsewhere.",
+    "list_leads / calendar / workload endpoints scan all leads (up to 3000/5000) with regex-based search — as data grows, add MongoDB text indexes on name/phone/email and compound indexes on {owner, next_follow_up, demo_date}."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8_gap_closure.py (new)",
+    "/app/test_reports/pytest/iteration8_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% of targeted iteration-8 testids and routes verified"},
+  "test_credentials": "OTP dev-mode: paripsa.tripathi@beet.health (manager), priya@beet.health (employee), admin@beet.health. dev_otp returned by POST /api/auth/request-otp. Token stored in localStorage key `beet_token`.",
+  "seed_data_creation": "Added missing 'Other' stage into db.options via mongosh (test needed it). Test file creates ~15 TEST_-prefixed leads per run; cleaned up with db.leads.deleteMany({name:/^TEST_/}) at end of this session (37 deleted).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: mongosh test_database --eval 'db.otps.deleteMany({})' before starting to avoid OTP rate limits. To bypass UI OTP prompt use API login: POST /api/auth/request-otp -> dev_otp, POST /api/auth/verify-otp -> token, then localStorage.setItem('beet_token', token) and navigate. Manager nav testids are nav-all-leads/nav-followups/nav-workload/nav-team-performance/nav-my-leads (NOT nav-leads). LeadDrawer status change to a requires_reason stage opens data-testid='lost-reason-modal' whose data-testid='confirm-lost-btn' stays disabled until reason (and, for 'Other', notes) provided. Demo/Invoice/Payment dates use native browser date pickers (known design nit). If tests hit dedup 409, generate unique phones+emails per lead. Also note: startup seed for options is guarded by count==0; if DEFAULT_OPTIONS grows the DB won't pick it up automatically.",
+  "rca of the issue": "No functional regressions. Two non-blocking observations: (1) 'Other' pipeline stage exists in DEFAULT_OPTIONS but the options-collection seed is idempotent per type (only seeds when collection empty for that type), so existing DBs won't receive newly added labels — recommend upsert-per-label on startup or in seed_demo.py; (2) date pickers remain native, breaking design consistency (carried over from iteration_7)."
+}
