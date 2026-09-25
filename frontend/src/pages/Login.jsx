@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Leaf, ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 export default function Login() {
   const { requestOtp, verifyOtp } = useAuth();
@@ -42,7 +42,10 @@ export default function Login() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-background">
       <div className="hidden lg:flex flex-col justify-between p-12 text-white" style={{ background: "linear-gradient(150deg,#4F46E5,#0D9488)" }}>
-        <div className="flex items-center gap-2"><div className="h-9 w-9 rounded-lg bg-white/20 grid place-items-center"><Leaf size={20} /></div><span className="font-extrabold text-xl">Beet.Health CRM</span></div>
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center rounded-xl bg-white px-3 py-2 shadow-sm"><img src="/beet-health-logo.png" alt="Beet.Health" className="h-8 w-auto" /></span>
+          <span className="font-extrabold text-xl">CRM</span>
+        </div>
         <div>
           <h1 className="text-4xl font-extrabold tracking-tight leading-tight">Your team's sales pipeline, coordinated and secure.</h1>
           <p className="mt-4 text-white/80 text-base">Approved team members sign in with a one-time code. Track leads, activities, demos, follow-ups and conversions — with private ownership and a real-time manager overview.</p>

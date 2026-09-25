@@ -9,7 +9,7 @@ import NotificationBell from "@/components/NotificationBell";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard, Users, Building2, Kanban as KanbanIcon, CheckSquare, Activity,
-  Calendar, CalendarDays, Gauge, BarChart3, PieChart, Settings as SettingsIcon, LogOut, Plus, Leaf, Search, RefreshCw,
+  Calendar, CalendarDays, Gauge, BarChart3, PieChart, Settings as SettingsIcon, LogOut, Plus, Search, RefreshCw,
 } from "lucide-react";
 
 const NAV = [
@@ -69,8 +69,7 @@ export default function Layout({ children }) {
     <div className="min-h-screen flex bg-background">
       <aside className="w-64 shrink-0 border-r border-border bg-white flex flex-col fixed h-screen z-40">
         <div className="h-16 flex items-center gap-2 px-6 border-b border-border">
-          <div className="h-8 w-8 rounded-lg grid place-items-center text-white brand-gradient"><Leaf size={18} /></div>
-          <span className="font-extrabold text-lg tracking-tight text-slate-900">Beet.Health</span>
+          <img src="/beet-health-logo.png" alt="Beet.Health" className="h-8 w-auto" />
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto scrollbar-thin">
           {NAV.filter((n) => !n.manager || isManager).map((n) => (
