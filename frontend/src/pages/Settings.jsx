@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { Download, Plus, Archive, ArchiveRestore, Power, Mail, Pencil, Users } from "lucide-react";
 import CustomFieldsPanel from "@/components/CustomFieldsPanel";
 import ImportPanel from "@/components/ImportPanel";
@@ -49,8 +51,11 @@ export default function Settings() {
   const openAdd = () => { setEditingId(null); setForm(emptyUser); setOpenUser(true); };
   const openEdit = (u) => { setEditingId(u.id); setForm({ name: u.name || "", email: u.email || "", role: u.role, employee_id: u.employee_id || "", team: u.team || "", manager_id: u.manager_id || "", joining_date: (u.joining_date || "").slice(0, 10), employment_type: u.employment_type || "Full-time" }); setOpenUser(true); };
 
+  const [savingUser, setSavingUser] = useState(false);
   const saveUser = async () => {
     if (!form.name || !form.email) return toast.error("Name and email required");
+    if (savingUser) return;
+    setSavingUser(true);
     try {
       if (editingId) {
         await api.patch(`/users/${editingId}`, { name: form.name, role: form.role, team: form.team, manager_id: form.manager_id || null, joining_date: form.joining_date || null, employment_type: form.employment_type });
@@ -60,7 +65,24 @@ export default function Settings() {
         toast.success("Team member added — they can now sign in with OTP");
       }
       setOpenUser(false); setForm(emptyUser); setEditingId(null); loadUsers();
-    } catch (e) { toast.error(apiError(e)); }
+    } catch (e) { toast.error(apiError(e)); } finally { setSavingUser(false); }
+  };
+
+  const [remind, setRemind] = useState(null);   // { ids: [...], message } while the reminder dialog is open
+  const [sendingRemind, setSendingRemind] = useState(false);
+  const activeUsers = users.filter((u) => u.active !== false);
+  const toggleRemindee = (id) => setRemind((r) => ({ ...r, ids: r.ids.includes(id) ? r.ids.filter((x) => x !== id) : [...r.ids, id] }));
+  const sendReminder = async () => {
+    if (!remind.ids.length) return toast.error("Pick at least one team member");
+    if (!remind.message.trim()) return toast.error("Enter the reminder message");
+    setSendingRemind(true);
+    try {
+      const { data } = await api.post("/reminders/send", { user_ids: remind.ids, message: remind.message });
+      const failed = data.sent.filter((s) => !s.emailed).length;
+      if (failed) toast.warning(`Reminder sent in-app to ${data.sent.length} member(s) — email failed for ${failed}`);
+      else toast.success(`Reminder sent to ${data.sent.length} member(s)`);
+      setRemind(null);
+    } catch (e) { toast.error(apiError(e)); } finally { setSendingRemind(false); }
   };
   const toggleActive = async (u) => {
     try { await api.patch(`/users/${u.id}`, { active: !u.active }); toast.success(u.active ? "Deactivated" : "Reactivated"); loadUsers(); }
@@ -189,8 +211,8 @@ export default function Settings() {
           {isManager && (
             <Card className="p-6">
               <h3 className="font-bold text-slate-900 mb-1">Follow-up Reminders</h3>
-              <p className="text-sm text-slate-500 mb-4">Each team member is automatically emailed their follow-ups, tasks and demos for the day every morning (from 08:00, team time zone), plus a nudge before each demo. Send them now:</p>
-              <Button data-testid="send-reminders-btn" variant="outline" className="gap-2" onClick={async () => { try { const { data } = await api.post("/reminders/run"); const ok = data.sent.filter((s) => s.emailed).length; const failed = data.sent.length - ok; if (!data.sent.length) toast.info("Nobody has follow-ups, tasks or demos due today"); else if (failed) toast.warning(`Reminders emailed to ${ok} of ${data.sent.length} team member(s) — ${failed} could not be sent`); else toast.success(`Reminders emailed to ${ok} team member(s)`); } catch (e) { toast.error(apiError(e)); } }}><Mail size={16} /> Send Reminders Now</Button>
+              <p className="text-sm text-slate-500 mb-4">Each team member is automatically emailed their follow-ups, tasks and demos for the day every morning (from 08:00, team time zone), plus a nudge before each demo. To remind specific people now, pick them and write a message:</p>
+              <Button data-testid="send-reminders-btn" variant="outline" className="gap-2" onClick={() => setRemind({ ids: [], message: "" })}><Mail size={16} /> Send Reminders Now</Button>
             </Card>
           )}
           {isManager && (
@@ -233,6 +255,42 @@ export default function Settings() {
         </Dialog>
       )}
 
+      {remind && (
+        <Dialog open={!!remind} onOpenChange={(o) => !o && setRemind(null)}>
+          <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
+            <DialogHeader><DialogTitle>Send Reminder</DialogTitle></DialogHeader>
+            <p className="text-sm text-slate-500">They'll get your message in the CRM notifications and by email, along with their follow-ups, tasks and demos for today.</p>
+            <div className="flex items-center justify-between">
+              <Label>Team members ({remind.ids.length} selected)</Label>
+              <button data-testid="remind-select-all" className="text-xs text-primary hover:underline"
+                onClick={() => setRemind((r) => ({ ...r, ids: r.ids.length === activeUsers.length ? [] : activeUsers.map((u) => u.id) }))}>
+                {remind.ids.length === activeUsers.length ? "Clear all" : "Select all"}
+              </button>
+            </div>
+            <div className="max-h-56 overflow-y-auto scrollbar-thin space-y-1 border border-border rounded-lg p-1.5">
+              {activeUsers.map((u) => (
+                <label key={u.id} data-testid={`remind-user-${u.id}`} className="flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-slate-50 cursor-pointer">
+                  <Checkbox checked={remind.ids.includes(u.id)} onCheckedChange={() => toggleRemindee(u.id)} />
+                  <span className="text-sm text-slate-800 flex-1 truncate">{u.name} <span className="text-xs text-slate-400">{u.email}</span></span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 capitalize">{u.role}</span>
+                </label>
+              ))}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reminder message *</Label>
+              <Textarea data-testid="remind-message-input" rows={3} value={remind.message} placeholder="e.g. Please update today's follow-ups before 6 PM"
+                onChange={(e) => setRemind((r) => ({ ...r, message: e.target.value }))} />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRemind(null)}>Cancel</Button>
+              <Button data-testid="remind-send-btn" className="gap-2" disabled={sendingRemind || !remind.ids.length || !remind.message.trim()} onClick={sendReminder}>
+                <Mail size={16} /> {sendingRemind ? "Sending…" : `Send to ${remind.ids.length || ""}`.trim()}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
       <Dialog open={openUser} onOpenChange={setOpenUser}>
         <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editingId ? "Edit Team Member" : "Add Team Member"}</DialogTitle></DialogHeader>
@@ -261,7 +319,7 @@ export default function Settings() {
               </Select>
             </div>
           </div>
-          <DialogFooter><Button variant="outline" onClick={() => setOpenUser(false)}>Cancel</Button><Button data-testid="save-employee-btn" onClick={saveUser}>{editingId ? "Save" : "Add & Approve"}</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setOpenUser(false)}>Cancel</Button><Button data-testid="save-employee-btn" onClick={saveUser} disabled={savingUser}>{savingUser ? "Saving…" : editingId ? "Save" : "Add & Approve"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

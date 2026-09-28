@@ -5,7 +5,7 @@ import os
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -30,6 +30,11 @@ EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Beet.Health CRM")
 APP_URL = os.environ.get("APP_URL", "").rstrip("/")
+# Optional Gmail sending (see _gmail_send). Without it, email goes through the Emergent email API.
+GMAIL_SERVICE_ACCOUNT_FILE = os.environ.get("GMAIL_SERVICE_ACCOUNT_FILE", "").strip()
+GMAIL_DEFAULT_SENDER = os.environ.get("GMAIL_DEFAULT_SENDER", "").strip().lower()   # mailbox for system emails
+GMAIL_ENABLED = bool(GMAIL_SERVICE_ACCOUNT_FILE and GMAIL_DEFAULT_SENDER)
+EMAIL_ENABLED = GMAIL_ENABLED or bool(EMAIL_KEY)
 APPROVED_EMAIL_DOMAIN = os.environ.get("APPROVED_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
 # Team time zone: defines "today" for follow-ups/tasks, report periods and the morning reminder.
 APP_TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Kolkata"))
@@ -244,8 +249,8 @@ async def notify(user_id, ntype, title, body="", link=""):
                                        "title": title, "body": body, "link": link, "read": False,
                                        "created_at": now_iso()})
 
-async def send_assignment_email(assignee, actor_name, label, lead, due_date, due_time, priority, note, link):
-    if not EMAIL_KEY:
+async def send_assignment_email(assignee, actor_name, label, lead, due_date, due_time, priority, note, link, sender=None):
+    if not EMAIL_ENABLED:
         return
     due_txt = ""
     if due_date:
@@ -265,7 +270,7 @@ async def send_assignment_email(assignee, actor_name, label, lead, due_date, due
             f'<p style="font-size:12px;color:#888">Sent by {escape(EMAIL_FROM_NAME)}. '
             f'We never ask for your password or codes by email.</p></td></tr></table>')
     try:
-        await send_email(assignee.get("email"), f"{EMAIL_FROM_NAME}: {label} assigned — {lead.get('name','')}", html)
+        await send_email(assignee.get("email"), f"{EMAIL_FROM_NAME}: {label} assigned — {lead.get('name','')}", html, sender=sender)
     except Exception as e:
         logger.error(f"assignment email failed: {e}")
 
@@ -317,12 +322,12 @@ async def assign_work(lead, responsibility, assignee, by_user, due_date=None, du
     if assignee["id"] != by_user["id"]:
         await notify(assignee["id"], "assignment", f"{by_user['name']} assigned you: {label}",
                      lead["name"] + (f" · due {due_date}" if due_date else "") + f" · {priority or 'Medium'}", link)
-        await send_assignment_email(assignee, by_user["name"], label, lead, due_date, due_time, priority, note, link)
+        await send_assignment_email(assignee, by_user["name"], label, lead, due_date, due_time, priority, note, link, sender=by_user)
     return task
 
 # ---------- email ----------
 async def send_otp_email(to, code):
-    if not EMAIL_KEY:
+    if not EMAIL_ENABLED:
         return False
     subject = f"Your {EMAIL_FROM_NAME} login code"
     html = (f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif">'
@@ -332,17 +337,16 @@ async def send_otp_email(to, code):
             f'<p style="font-size:12px;color:#888">Sent by {escape(EMAIL_FROM_NAME)}. We never ask for your password or codes by reply.</p>'
             f'</td></tr></table>')
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(f"{EMAIL_BASE_URL}/api/v1/email/send", headers={"X-Email-Key": EMAIL_KEY},
-                             json={"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME})
-        r.raise_for_status()
+        await _deliver(to, subject, html)
         return True
     except Exception as e:
         logger.error(f"OTP email failed: {e}")
         return False
 
-async def send_email(to, subject, html):
-    if not EMAIL_KEY:
+async def send_email(to, subject, html, sender=None):
+    """sender: the user the email is from (e.g. the manager sending a reminder). With Gmail configured it is
+    sent from their own Workspace mailbox; otherwise it goes out from the CRM address under their name."""
+    if not EMAIL_ENABLED:
         return False
     try:
         _assert_safe_email(subject, html)
@@ -350,17 +354,66 @@ async def send_email(to, subject, html):
         logger.error(f"email blocked by safety gate: {e}")
         return False
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(f"{EMAIL_BASE_URL}/api/v1/email/send", headers={"X-Email-Key": EMAIL_KEY},
-                             json={"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME})
-        r.raise_for_status()
+        await _deliver(to, subject, html, sender)
         return True
     except Exception as e:
         logger.error(f"email failed: {e}")
         return False
 
+async def _deliver(to, subject, html, sender=None):
+    if GMAIL_ENABLED:
+        if sender and sender.get("email"):
+            try:
+                return await _gmail_send(sender["email"], sender.get("name"), to, subject, html)
+            except Exception as e:
+                # e.g. the sender isn't a mailbox in the Workspace domain: send from the CRM address, replies to them
+                logger.warning(f"gmail send as {sender['email']} failed, using {GMAIL_DEFAULT_SENDER}: {e}")
+                return await _gmail_send(GMAIL_DEFAULT_SENDER, f"{sender.get('name')} via {EMAIL_FROM_NAME}", to,
+                                         subject, html, reply_to=sender["email"])
+        return await _gmail_send(GMAIL_DEFAULT_SENDER, EMAIL_FROM_NAME, to, subject, html)
+    from_name = f"{sender['name']} via {EMAIL_FROM_NAME}" if sender and sender.get("name") else EMAIL_FROM_NAME
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{EMAIL_BASE_URL}/api/v1/email/send", headers={"X-Email-Key": EMAIL_KEY},
+                         json={"to": [to], "subject": subject, "html": html, "from_name": from_name})
+    r.raise_for_status()
+
+# Gmail API with a Google Workspace service account (domain-wide delegation, scope gmail.send): each email is
+# sent from the real sender's mailbox, so Gmail shows From/mailed-by/signed-by as the company domain.
+_gmail_creds = {}
+
+def _gmail_token(mailbox):
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request as GoogleRequest
+    creds = _gmail_creds.get(mailbox)
+    if creds is None:
+        creds = service_account.Credentials.from_service_account_file(
+            GMAIL_SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/gmail.send"], subject=mailbox)
+        _gmail_creds[mailbox] = creds
+    if not creds.valid:
+        creds.refresh(GoogleRequest())
+    return creds.token
+
+async def _gmail_send(mailbox, name, to, subject, html, reply_to=None):
+    from email.message import EmailMessage
+    from email.utils import formataddr
+    import base64
+    msg = EmailMessage()
+    msg["From"] = formataddr((name or "", mailbox))
+    msg["To"] = to
+    msg["Subject"] = subject
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.set_content("Please view this email in an HTML-capable mail app.")
+    msg.add_alternative(html, subtype="html")
+    token = await asyncio.to_thread(_gmail_token, mailbox)
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                         headers={"Authorization": f"Bearer {token}"},
+                         json={"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()})
+    r.raise_for_status()
+
 async def send_welcome_email(user, back=False):
-    if not EMAIL_KEY:
+    if not EMAIL_ENABLED:
         return False
     title = "Welcome back to" if back else "Welcome to"
     button = (f'<p style="margin:18px 0"><a href="{escape(APP_URL)}/login" '
@@ -442,7 +495,8 @@ def _crm_link(path, text):
     # The outbound email safety gate only allows https links, so links are added only for an https APP_URL.
     return f' <a href="{escape(APP_URL)}{path}">{escape(text)}</a>' if APP_URL.startswith("https://") else ""
 
-def _digest_html(u, d):
+def _digest_html(u, d, note=None, sender=None):
+    """Daily plan email. With `note`, it's a manager's manual reminder: their message first, then the plan if any."""
     def section(title, items):
         return (f'<h3 style="margin:18px 0 6px">{escape(title)}</h3><ul>{"".join(items)}</ul>') if items else ""
     overdue_ids = {l["id"] for l in d["overdue"]}
@@ -457,10 +511,18 @@ def _digest_html(u, d):
     button = (f'<p style="margin:18px 0"><a href="{escape(APP_URL)}/dashboard" style="background:#E11D6B;color:#fff;'
               f'text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;display:inline-block">Open CRM</a></p>'
               if APP_URL.startswith("https://") else "")
+    counts = (f'you have <b>{len(d["due"])}</b> follow-ups due today, <b>{len(d["overdue"])}</b> overdue, '
+              f'<b>{len(d["tasks"])}</b> tasks and <b>{len(d["demos"])}</b> demos.')
+    if note:
+        title = f"Reminder from {escape(sender or 'your manager')}"
+        intro = (f'<p>Hi {escape(u["name"])},</p>'
+                 f'<p style="padding:12px 14px;background:#F5F3FF;border-left:4px solid #4F46E5;white-space:pre-line">{escape(note)}</p>'
+                 + (f'<p>For today, {counts}</p>' if any(d.values()) else ""))
+    else:
+        title = "Your plan for today"
+        intro = f'<p>Hi {escape(u["name"])}, {counts}</p>'
     return (f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif">'
-            f'<h2 style="color:#4F46E5;margin:0 0 8px">Your plan for today</h2>'
-            f'<p>Hi {escape(u["name"])}, you have <b>{len(d["due"])}</b> follow-ups due today, <b>{len(d["overdue"])}</b> overdue, '
-            f'<b>{len(d["tasks"])}</b> tasks and <b>{len(d["demos"])}</b> demos.</p>'
+            f'<h2 style="color:#4F46E5;margin:0 0 8px">{title}</h2>{intro}'
             f'{section("Demos today", dm)}{section("Follow-ups", fu)}{section("Tasks due", tk)}{button}'
             f'<p style="font-size:12px;color:#888">Sent by {escape(EMAIL_FROM_NAME)}. '
             f'We never ask for your password or codes by email.</p></td></tr></table>')
@@ -794,7 +856,7 @@ async def list_users(user: dict = Depends(get_current_user)):
     return [{"id": u["id"], "name": u["name"], "role": u["role"], "team": u.get("team"), "active": u.get("active", True)} for u in users]
 
 @api.post("/users")
-async def create_user(body: UserIn, mgr: dict = Depends(require_manager)):
+async def create_user(body: UserIn, background: BackgroundTasks, mgr: dict = Depends(require_manager)):
     if body.role not in ALL_ROLES:
         raise HTTPException(400, "Invalid role")
     if body.role == "admin" and mgr.get("role") != "admin":
@@ -813,14 +875,13 @@ async def create_user(body: UserIn, mgr: dict = Depends(require_manager)):
            "active": True, "created_by": mgr["id"], "created_at": now_iso()}
     await db.users.insert_one(dict(doc))
     await audit(mgr, "create", "user", doc["id"], detail=f"Added {body.name} ({body.role})")
-    try:
-        await send_welcome_email(doc)
-    except Exception as e:
-        logger.error(f"welcome email failed: {e}")
+    # Sent after the response: waiting on a slow/failing mail API left the form open and invited a second
+    # submit, which then failed with "already exists" even though the user was created.
+    background.add_task(send_welcome_email, dict(doc))
     return clean(doc)
 
 @api.patch("/users/{uid}")
-async def update_user(uid: str, body: UserUpdate, mgr: dict = Depends(require_manager)):
+async def update_user(uid: str, body: UserUpdate, background: BackgroundTasks, mgr: dict = Depends(require_manager)):
     u = await db.users.find_one({"id": uid})
     if not u:
         raise HTTPException(404, "Not found")
@@ -843,10 +904,7 @@ async def update_user(uid: str, body: UserUpdate, mgr: dict = Depends(require_ma
     for k, v in updates.items():
         await audit(mgr, "update", "user", uid, field=k, prev=u.get(k, ""), new=v)
     if updates.get("active") is True and not u.get("active", True):
-        try:
-            await send_welcome_email({**u, **updates}, back=True)
-        except Exception as e:
-            logger.error(f"welcome email failed: {e}")
+        background.add_task(send_welcome_email, {**u, **updates}, back=True)
     return clean(await db.users.find_one({"id": uid}))
 
 class BulkReassignIn(BaseModel):
@@ -990,6 +1048,8 @@ async def list_leads(request: Request, user: dict = Depends(get_current_user)):
     for f in ("status", "source", "owner", "team", "demo_status", "payment_status", "invoice_status"):
         if p.get(f):
             q[f] = p.get(f)
+    if "," in (p.get("status") or ""):   # e.g. the dashboard's "Lost / Not Interested" tile
+        q["status"] = {"$in": [s.strip() for s in p.get("status").split(",") if s.strip()]}
     if p.get("assigned_to"):
         q["owner"] = p.get("assigned_to")
     if p.get("follow_up"):
@@ -1309,6 +1369,14 @@ async def list_activities(request: Request, user: dict = Depends(get_current_use
         q["employee_id"] = user["id"]
     if p.get("lead_id"): q["lead_id"] = p.get("lead_id")
     if p.get("employee_id") and is_manager(user): q["employee_id"] = p.get("employee_id")
+    elif p.get("staff") and is_manager(user):   # same people the dashboard's team metrics count
+        q["employee_id"] = {"$in": [u["id"] for u in await db.users.find({"role": {"$in": list(STAFF_ROLES)}}, {"id": 1}).to_list(500)]}
+    if p.get("type"):
+        q["type"] = {"$in": [t.strip() for t in p.get("type").split(",") if t.strip()]}
+    if p.get("period"):
+        s, e = period_bounds(p.get("period"), p.get("start"), p.get("end"))
+        if s and e:
+            q["timestamp"] = {"$gte": s, "$lte": e}
     acts = await db.activities.find(q).sort("timestamp", -1).to_list(1500)
     return [clean(a) for a in acts]
 
@@ -1704,22 +1772,42 @@ async def import_parse(file: UploadFile = File(...), mgr: dict = Depends(require
     name = (file.filename or "").lower()
     # Read every cell as text: type inference turns phone columns with a blank cell (and Excel numbers)
     # into floats, which would store "9876543210.0" and break phone normalisation/duplicate checks.
+    # Read without a header so a title row above the real headers doesn't turn every column into "Unnamed: N".
     try:
         if name.endswith(".xlsx") or name.endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(content), dtype=str, keep_default_na=False)
+            raw = pd.read_excel(io.BytesIO(content), dtype=str, keep_default_na=False, header=None)
         else:
-            df = None
+            raw = None
             for enc in ("utf-8-sig", "cp1252", "latin-1"):   # Excel saves CSVs as Windows-1252 by default
                 try:
-                    df = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, encoding=enc)
+                    raw = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, encoding=enc, header=None)
                     break
                 except UnicodeDecodeError:
                     continue
     except Exception as e:
         raise HTTPException(400, f"Could not read file: {e}")
-    df = df.fillna("")
-    rows = df.astype(str).to_dict(orient="records")[:2000]
-    return {"columns": [str(c) for c in df.columns], "rows": rows, "total": len(rows)}
+    if raw is None or raw.empty:
+        raise HTTPException(400, "The file is empty")
+    grid = [[_import_cell(v) for v in r] for r in raw.fillna("").astype(str).values.tolist()]
+    # Header = first row with at least two filled cells (a title row usually has one).
+    header_idx = next((i for i, r in enumerate(grid) if sum(1 for v in r if v) >= 2), 0)
+    columns, seen = [], {}
+    for i, h in enumerate(grid[header_idx]):
+        h = h or f"Column {i + 1}"
+        seen[h] = seen.get(h, 0) + 1
+        columns.append(h if seen[h] == 1 else f"{h} ({seen[h]})")
+    keep = [i for i, c in enumerate(columns) if any(r[i] for r in grid[header_idx + 1:]) or not c.startswith("Column ")]
+    columns = [columns[i] for i in keep]
+    rows = [{columns[j]: r[i] for j, i in enumerate(keep)} for r in grid[header_idx + 1:] if any(r)][:2000]
+    return {"columns": columns, "rows": rows, "total": len(rows)}
+
+def _import_cell(v):
+    v = str(v).strip()
+    # Excel number cells come through as floats ("9876543210.0"), which would corrupt phone numbers.
+    return v[:-2] if re.fullmatch(r"\d+\.0", v) else v
+
+def _stage_key(s):
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 class ImportCommit(BaseModel):
     mapping: dict
@@ -1733,8 +1821,9 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
     imported = dups = invalid = 0
     details = []
     seen_phone, seen_email, seen_ig, seen_li = set(), set(), set(), set()
-    stage_by_lower = {o["label"].lower(): o["label"]
-                      for o in await db.options.find({"type": "stage", "archived": {"$ne": True}}).to_list(200)}
+    # Match statuses ignoring case, spaces and punctuation ("follow up" -> "Follow-up", "demo no show" -> "Demo No-show").
+    stage_by_key = {_stage_key(o["label"]): o["label"]
+                    for o in await db.options.find({"type": "stage", "archived": {"$ne": True}}).to_list(200)}
     def g(row, field):
         col = m.get(field)
         return str(row.get(col, "")).strip() if col else ""
@@ -1743,7 +1832,7 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
         if not name:
             invalid += 1; details.append({"name": "(blank)", "status": "invalid", "reason": "missing name"}); continue
         raw_status = g(row, "status")
-        status = stage_by_lower.get(raw_status.lower()) if raw_status else "New Lead"
+        status = stage_by_key.get(_stage_key(raw_status)) if raw_status else "New Lead"
         if not status:
             invalid += 1; details.append({"name": name, "status": "invalid", "reason": f"unknown status '{raw_status}'"}); continue
         phone, email = g(row, "phone"), g(row, "email")
@@ -1775,6 +1864,8 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
         except DuplicateKeyError:
             dups += 1; details.append({"name": name, "status": "duplicate"})
     await audit(mgr, "import", "lead", "batch", detail=f"{imported} imported, {dups} duplicates, {invalid} invalid")
+    # Invalid rows first so the UI can list what needs fixing even on large imports.
+    details.sort(key=lambda d: d["status"] != "invalid")
     return {"total": len(body.rows), "imported": imported, "duplicates": dups, "invalid": invalid, "details": details[:200]}
 
 # ---------- follow-up reminders ----------
@@ -1786,6 +1877,28 @@ async def reminders_preview(user: dict = Depends(get_current_user)):
 @api.post("/reminders/run")
 async def reminders_run(mgr: dict = Depends(require_manager)):
     return {"sent": await run_reminders(force=True)}
+
+class ReminderSendIn(BaseModel):
+    user_ids: List[str] = Field(..., min_length=1, max_length=500)
+    message: str = Field(..., max_length=LONG_MAX)
+
+@api.post("/reminders/send")
+async def reminders_send(body: ReminderSendIn, mgr: dict = Depends(require_manager)):
+    """Manual reminder to chosen team members (any role): the manager's message, in-app and by email,
+    plus each person's plan for today. Doesn't count as their morning digest."""
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(400, "Enter the reminder message")
+    inactive = await _inactive_user_ids()
+    sent = []
+    for u in await db.users.find({"id": {"$in": body.user_ids}, "active": True}).to_list(500):
+        await notify(u["id"], "reminder", f"Reminder from {mgr['name']}", message[:SHORT_MAX], "/dashboard")
+        d = await build_user_digest(u["id"], inactive)
+        ok = await send_email(u["email"], f"Reminder from {mgr['name']}",
+                              _digest_html(u, d, note=message, sender=mgr["name"]), sender=mgr)
+        sent.append({"user": u["name"], "email": u["email"], "emailed": ok})
+    await audit(mgr, "send", "reminder", "manual", detail=f"to {len(sent)} member(s): {message[:120]}")
+    return {"sent": sent}
 
 # ---------- lead timeline (unified chronological) ----------
 @api.get("/leads/{lid}/timeline")

@@ -113,7 +113,7 @@ export default function LeadsPage({ scope }) {
         </div>
         <Select value={status} onValueChange={(v) => { setStatus(v); setParams((sp) => { v === "all" ? sp.delete("status") : sp.set("status", v); return sp; }); }}>
           <SelectTrigger data-testid="filter-status" className="w-40"><SelectValue placeholder="Status" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All Statuses</SelectItem>{labels("stage").map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+          <SelectContent><SelectItem value="all">All Statuses</SelectItem>{status.includes(",") && <SelectItem value={status}>{status.split(",").join(" / ")}</SelectItem>}{labels("stage").map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={followUp} onValueChange={(v) => { setFollowUp(v); setParams((sp) => { v === "all" ? sp.delete("follow_up") : sp.set("follow_up", v); return sp; }); }}>
           <SelectTrigger data-testid="filter-followup" className="w-36"><SelectValue placeholder="Follow-up" /></SelectTrigger>

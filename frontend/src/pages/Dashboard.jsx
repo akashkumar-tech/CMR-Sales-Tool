@@ -12,6 +12,10 @@ import {
   Star, CheckCircle2, Reply, Lock, Activity as ActivityIcon,
 } from "lucide-react";
 
+// Activity types behind the "Calls Made" / "Messages Sent" counts (see compute_metrics in the backend).
+const CALL_TYPES = "Call";
+const MESSAGE_TYPES = "WhatsApp,Instagram,LinkedIn,Email";
+
 const Stat = ({ icon: Icon, label, value, tone = "text-primary bg-primary/10", testid, onClick }) => (
   <Card data-testid={testid} onClick={onClick} className={`p-4 flex items-center gap-3 transition-transform ${onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md" : ""}`}>
     <div className={`h-10 w-10 rounded-xl grid place-items-center shrink-0 ${tone}`}><Icon size={18} /></div>
@@ -45,6 +49,8 @@ function ManagerDashboard({ user }) {
       conversions: sum("conversions"), demos_booked: sum("demos_booked"), lost: sum("lost"), overdue_follow_ups: sum("overdue_follow_ups") };
   }
   const go = (qs) => () => navigate(`/all-leads?${qs}`);
+  // Same filters the backend uses for these counts: this month's team activities of these types.
+  const goActs = (types) => () => navigate(`/activities?type=${encodeURIComponent(types)}&period=month&staff=1`);
 
   return (
     <div className="space-y-6">
@@ -59,9 +65,9 @@ function ManagerDashboard({ user }) {
           <Stat testid="stat-interested" icon={Star} label="Interested" value={perf.interested} tone="text-amber-600 bg-amber-50" onClick={go("status=Interested")} />
           <Stat testid="stat-demos" icon={Calendar} label="Demos Booked" value={perf.demos_booked} tone="text-purple-600 bg-purple-50" onClick={go("status=Demo Booked")} />
           <Stat testid="stat-conversions" icon={TrendingUp} label="Conversions" value={perf.conversions} tone="text-teal-600 bg-teal-50" onClick={go("status=Converted")} />
-          <Stat testid="stat-calls" icon={Phone} label="Calls Made" value={perf.calls} tone="text-emerald-600 bg-emerald-50" />
-          <Stat testid="stat-messages" icon={MessageSquare} label="Messages Sent" value={perf.messages} tone="text-blue-600 bg-blue-50" />
-          <Stat testid="stat-lost" icon={AlertCircle} label="Lost / Not Interested" value={perf.lost} tone="text-rose-600 bg-rose-50" onClick={go("status=Lost")} />
+          <Stat testid="stat-calls" icon={Phone} label="Calls Made" value={perf.calls} tone="text-emerald-600 bg-emerald-50" onClick={goActs(CALL_TYPES)} />
+          <Stat testid="stat-messages" icon={MessageSquare} label="Messages Sent" value={perf.messages} tone="text-blue-600 bg-blue-50" onClick={goActs(MESSAGE_TYPES)} />
+          <Stat testid="stat-lost" icon={AlertCircle} label="Lost / Not Interested" value={perf.lost} tone="text-rose-600 bg-rose-50" onClick={go("status=Lost,Not Interested")} />
           <Stat testid="stat-overdue" icon={AlertCircle} label="Overdue Follow-ups" value={perf.overdue_follow_ups} tone="text-rose-600 bg-rose-50" onClick={go("follow_up=overdue")} />
         </div>
       )}

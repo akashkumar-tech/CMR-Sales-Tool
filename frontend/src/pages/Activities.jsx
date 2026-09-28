@@ -1,18 +1,30 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { fmtDate } from "@/lib/crm";
 import { Card } from "@/components/ui/card";
-import { Phone, MessageCircle, Instagram, Mail, StickyNote, Calendar, RefreshCw } from "lucide-react";
+import { Phone, MessageCircle, Instagram, Mail, StickyNote, Calendar, RefreshCw, X } from "lucide-react";
 
 const ICONS = { Call: Phone, WhatsApp: MessageCircle, Instagram, Email: Mail, Note: StickyNote, Demo: Calendar, "Follow-up": RefreshCw, "Stage Change": RefreshCw };
+const PERIODS = { today: "today", week: "this week", month: "this month", quarter: "this quarter", year: "this year" };
 
 export default function Activities() {
+  const [params, setParams] = useSearchParams();
   const [acts, setActs] = useState([]);
-  useEffect(() => { api.get("/activities").then((r) => setActs(r.data)); }, []);
+  // Filters come from the dashboard tiles (e.g. ?type=Call&period=month&staff=1).
+  const type = params.get("type") || "";
+  const period = params.get("period") || "";
+  useEffect(() => { api.get(`/activities?${params.toString()}`).then((r) => setActs(r.data)); }, [params]);
 
   return (
     <div className="space-y-5">
       <div><p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">Timeline</p><h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Activities</h1></div>
+      {(type || period) && (
+        <div data-testid="activity-filter" className="flex items-center gap-2 text-sm text-slate-600">
+          <span>Showing <b className="text-slate-900">{type ? type.split(",").join(", ") : "all"}</b> activities{period ? ` ${PERIODS[period] || ""}` : ""} · {acts.length}</span>
+          <button data-testid="clear-activity-filter" onClick={() => setParams({})} className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><X size={12} /> Clear</button>
+        </div>
+      )}
       <Card className="p-6">
         <div className="space-y-4">
           {acts.map((a) => {
@@ -33,7 +45,7 @@ export default function Activities() {
               </div>
             );
           })}
-          {acts.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No activities yet.</p>}
+          {acts.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No activities {type || period ? "match this filter" : "yet"}.</p>}
         </div>
       </Card>
     </div>

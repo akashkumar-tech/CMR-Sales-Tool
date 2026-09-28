@@ -41,6 +41,9 @@ dist
 
 *token.json*
 *credentials.json*
+# Google service account keys (GMAIL_SERVICE_ACCOUNT_FILE)
+backend/*service*account*.json
+backend/gmail-sender*.json
 
 # Logs and debug files
 npm-debug.log*

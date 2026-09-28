@@ -14,19 +14,40 @@ const CRM_FIELDS = [
   ["source", "Source"], ["status", "Status"], ["notes", "Notes"],
 ];
 
-function guess(col) {
-  const c = col.toLowerCase();
-  if (c.includes("name")) return "name";
-  if (c.includes("phone") || c.includes("mobile") || c.includes("whatsapp")) return "phone";
-  if (c.includes("mail")) return "email";
-  if (c.includes("insta") || c === "ig") return "instagram";
-  if (c.includes("linkedin")) return "linkedin";
-  if (c.includes("practice") || c.includes("clinic")) return "practice";
-  if (c.includes("location") || c.includes("city")) return "location";
-  if (c.includes("source")) return "source";
-  if (c.includes("status") || c.includes("stage")) return "status";
-  if (c.includes("note")) return "notes";
-  return "__skip__";
+const normHeader = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+// Checked in order: specific fields come before "name" so headers like "Clinic Name" or
+// "Instagram Username" aren't taken as the lead's name.
+const FIELD_RULES = [
+  ["email", /e ?mail/],
+  ["phone", /phone|mobile|whats ?app|contact (no|num|number)|\bcell\b|\bmob\b|\btel\b/],
+  ["instagram", /insta|\big\b/],
+  ["linkedin", /linked ?in/],
+  ["practice", /practice|clinic|hospital|company|organi[sz]ation|business/],
+  ["location", /location|city|address|\barea\b|\bstate\b|region|country/],
+  ["source", /source|channel/],
+  ["status", /status|stage/],
+  ["notes", /note|remark|comment/],
+  ["name", /name|\blead\b|doctor|\bdr\b|client|customer|contact person/],
+];
+
+function guessMapping(columns) {
+  const m = {};
+  const used = new Set();
+  const take = (field, col) => { if (!m[field] && !used.has(col)) { m[field] = col; used.add(col); } };
+  // Exact header matches ("Name", "Lead Name", "Phone") win over partial ones.
+  columns.forEach((col) => {
+    const h = normHeader(col);
+    const hit = CRM_FIELDS.find(([f, label]) => h === f || h === normHeader(label));
+    if (hit) take(hit[0], col);
+  });
+  columns.forEach((col) => {
+    const h = normHeader(col);
+    if (!h || h.startsWith("unnamed")) return;
+    const rule = FIELD_RULES.find(([, re]) => re.test(h));
+    if (rule) take(rule[0], col);
+  });
+  return m;
 }
 
 export default function ImportPanel() {
@@ -44,9 +65,7 @@ export default function ImportPanel() {
       const fd = new FormData(); fd.append("file", f);
       const { data } = await api.post("/import/parse", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setParsed(data);
-      const m = {};
-      data.columns.forEach((c) => { const g = guess(c); if (g !== "__skip__") m[g] = c; });
-      setMapping(m);
+      setMapping(guessMapping(data.columns));
       toast.success(`Read ${data.total} rows`);
     } catch (err) { toast.error(apiError(err)); } finally { setBusy(false); }
   };
@@ -105,6 +124,11 @@ export default function ImportPanel() {
             <div><p className="text-xl font-extrabold text-amber-600">{summary.duplicates}</p><p className="text-xs text-slate-500">Duplicates</p></div>
             <div><p className="text-xl font-extrabold text-rose-600">{summary.invalid}</p><p className="text-xs text-slate-500">Need review</p></div>
           </div>
+          {summary.details?.some((d) => d.status === "invalid") && (
+            <ul data-testid="import-invalid-list" className="mt-3 max-h-40 overflow-y-auto scrollbar-thin text-xs text-rose-700 space-y-0.5">
+              {summary.details.filter((d) => d.status === "invalid").map((d, i) => <li key={i}>{d.name} — {d.reason}</li>)}
+            </ul>
+          )}
         </div>
       )}
     </Card>

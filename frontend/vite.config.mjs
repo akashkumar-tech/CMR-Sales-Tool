@@ -75,6 +75,8 @@ if (!hotReloadDisabled) {
   process.env.CHOKIDAR_USEPOLLING = "true";
 }
 
+const apiProxy = { "/api": { target: process.env.API_PROXY_TARGET || "http://localhost:8001", changeOrigin: true } };
+
 // https://vite.dev/config/
 export default defineConfig(async ({ mode, command }) => {
   const env = loadEnv(mode, __dirname, ["REACT_APP_", "VITE_"]);
@@ -184,6 +186,10 @@ export default defineConfig(async ({ mode, command }) => {
       // Build-error rendering: emergent-overlay when it loaded, else Vite's own overlay.
       hmr: hotReloadDisabled ? false : { overlay: !emergentOverlay },
       watch: hotReloadDisabled ? null : { usePolling: true, interval: 300 },
+      proxy: apiProxy,
     },
+    // `vite preview` of the production build, used to share the app through a single tunnel (e.g. ngrok):
+    // with REACT_APP_BACKEND_URL empty the app calls same-origin /api, which is forwarded to the backend.
+    preview: { host: true, port: 3000, allowedHosts: true, proxy: apiProxy },
   };
 });
