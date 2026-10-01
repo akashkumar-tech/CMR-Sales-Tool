@@ -116,7 +116,6 @@ export default function CalendarPage() {
 
       <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
         {Object.entries(KIND).map(([k, v]) => <span key={k} className="inline-flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-full ${v.dot}`} /> {v.label}</span>)}
-        <span className="inline-flex items-center gap-1.5"><span className="line-through opacity-50">Done</span> = completed / no-show</span>
       </div>
 
       {loadError && (

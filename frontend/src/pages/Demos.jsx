@@ -6,13 +6,16 @@ import LeadDrawer from "@/components/LeadDrawer";
 import { Card } from "@/components/ui/card";
 import { Calendar, User, Clock } from "lucide-react";
 
+// Same rule as lead_has_demo() in server.py, which the Reports "Demos" count uses.
+const DEMO_STAGES = ["Demo Booked", "Demo Completed", "Demo No-show", "Rescheduled"];
+
 export default function Demos() {
   const [leads, setLeads] = useState([]);
   const [members, setMembers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [open, setOpen] = useState(false);
 
-  const load = () => api.get("/leads").then((r) => setLeads(r.data.filter((l) => l.demo_date || ["Demo Booked", "Demo Completed"].includes(l.status)))).catch(() => {});
+  const load = () => api.get("/leads").then((r) => setLeads(r.data.filter((l) => l.demo_date || l.demo_status || DEMO_STAGES.includes(l.status)))).catch(() => {});
   useEffect(() => { load(); api.get("/users").then((r) => setMembers(r.data)).catch(() => {}); }, []);
   useAutoRefresh(load, 10000);
   const memberName = (id) => members.find((m) => m.id === id)?.name || "Unassigned";
@@ -25,7 +28,7 @@ export default function Demos() {
           <Card key={l.id} data-testid={`demo-card-${l.id}`} onClick={() => { setSelected(l.id); setOpen(true); }} className="p-5 cursor-pointer hover:-translate-y-0.5 transition-transform">
             <div className="flex items-center justify-between">
               <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${stageStyle(l.status)}`}>{l.status}</span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-100">{l.demo_status || "Scheduled"}</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-100">{l.demo_status || (l.status === "Demo Completed" ? "Completed" : "Scheduled")}</span>
             </div>
             <p className="font-bold text-slate-900 mt-3">{l.name}</p>
             <p className="text-sm text-slate-500">{l.practice}</p>

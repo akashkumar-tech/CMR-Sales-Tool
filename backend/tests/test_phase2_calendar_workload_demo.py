@@ -48,8 +48,7 @@ def test_only_three_users_exist(mgr):
     assert ADMIN_EMAIL in emails
     assert MGR_EMAIL in emails
     assert EMP_EMAIL in emails
-    assert "arjun@beet.health" not in emails
-    assert "neha@beet.health" not in emails
+    # (No longer asserts arjun/neha are absent: test_iteration4 and test_employee_workspace need those accounts.)
 
 
 def test_no_leads_refer_to_deleted_users(mgr):
@@ -163,7 +162,7 @@ def test_demo_schedule_and_complete_flow(mgr, emp, priya_lead):
     due = (date.today() + timedelta(days=5)).isoformat()
     r2 = requests.post(f"{BASE}/leads/{lid}/demo/complete", headers=mgr["h"],
                        json={"demo_status": "Completed", "outcome": "Positive",
-                             "new_status": "Proposal Sent",
+                             "new_status": "Pricing Shared",
                              "next_action": "Follow-up",
                              "next_owner_id": emp["user"]["id"],
                              "next_due_date": due,
@@ -172,7 +171,7 @@ def test_demo_schedule_and_complete_flow(mgr, emp, priya_lead):
     resp2 = r2.json()
     lead2 = resp2["lead"]
     assert lead2["demo_status"] == "Completed"
-    assert lead2["status"] == "Proposal Sent"
+    assert lead2["status"] == "Pricing Shared"
     assert lead2.get("followup_assigned_to") == emp["user"]["id"]
     assert lead2.get("next_follow_up", "")[:10] == due
     assert resp2["task"] is not None

@@ -27,18 +27,48 @@ export function stageStyle(s) {
 
 export function fmtDate(d) {
   if (!d) return "—";
-  try { return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+  try {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return d;
+    return dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
   catch { return d; }
 }
 export function fmtDateTime(d) {
   if (!d) return "—";
-  try { return new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+  try {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return d;
+    return dt.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
   catch { return d; }
 }
 // Today's date (YYYY-MM-DD) in the user's local time zone — due dates are local calendar dates.
 export function localToday() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// Quick date ranges for exports: [key, label]. Weeks run Monday–Sunday, like the reports.
+export const EXPORT_PERIODS = [
+  ["today", "Today"], ["yesterday", "Yesterday"], ["last7", "Last 7 Days"], ["this_week", "This Week"],
+  ["last_week", "Last Week"], ["this_month", "This Month"], ["last_month", "Last Month"], ["custom", "Custom Date Range"],
+];
+// [start, end] as YYYY-MM-DD (both inclusive) for a quick range, counted from the given local date.
+export function periodRange(key, today = localToday()) {
+  const [y, m, d] = today.split("-").map(Number);
+  const iso = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  const day = (offset) => iso(new Date(y, m - 1, d + offset));
+  const sinceMonday = (new Date(y, m - 1, d).getDay() + 6) % 7;
+  switch (key) {
+    case "today": return [today, today];
+    case "yesterday": return [day(-1), day(-1)];
+    case "last7": return [day(-6), today];
+    case "this_week": return [day(-sinceMonday), day(6 - sinceMonday)];
+    case "last_week": return [day(-sinceMonday - 7), day(-sinceMonday - 1)];
+    case "this_month": return [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0))];
+    case "last_month": return [iso(new Date(y, m - 2, 1)), iso(new Date(y, m - 1, 0))];
+    default: return ["", ""];
+  }
 }
 export function initials(name) {
   return (name || "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();

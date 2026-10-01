@@ -10,7 +10,9 @@ MANAGER_EMAIL = "paripsa.tripathi@beet.health"
 EMPLOYEE_EMAIL = "priya@beet.health"
 ADMIN_EMAIL = "admin@beet.health"
 
-FUNNEL_ORDER = ["New Lead", "Contacted", "Interested", "Demo", "Trial", "Pricing", "Invoice", "Payment", "Converted"]
+# Current funnel (FUNNEL_STEPS in server.py)
+FUNNEL_ORDER = ["Leads Generated", "People Contacted", "Any Reply", "Idea Explained", "Interested / Asked for Demo",
+                "Demo Booked", "Demo Completed", "Commercials Opened / Invoice Raised", "Invoice Paid", "Clients Added"]
 SALES_KEYS = {"leads", "outreach", "responses", "demos", "trials", "follow_ups", "invoices", "payments", "conversions", "losses"}
 
 

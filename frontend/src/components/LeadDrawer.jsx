@@ -28,7 +28,6 @@ export default function LeadDrawer({ leadId, open, onOpenChange, onChange, membe
   const { isManager } = useAuth();
   const { labels, customFields } = useOptions();
   const [lead, setLead] = useState(null);
-  const [acts, setActs] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [history, setHistory] = useState({ audit: [], assignments: [] });
   const [tab, setTab] = useState(initialTab);
@@ -43,7 +42,7 @@ export default function LeadDrawer({ leadId, open, onOpenChange, onChange, membe
   const stageOpts = useOptions().list("stage");
 
   const loadTimeline = () => {
-    api.get(`/activities?lead_id=${leadId}`).then((r) => setActs(r.data)).catch(() => {});
+    // Activities are shown through the timeline below (no separate /activities fetch needed).
     api.get(`/leads/${leadId}/history`).then((r) => setHistory(r.data)).catch(() => {});
     api.get(`/leads/${leadId}/timeline`).then((r) => setTimeline(r.data.events || [])).catch(() => {});
   };

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, apiError, API } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useOptions } from "@/context/OptionsContext";
-import { fmtDateTime, initials } from "@/lib/crm";
+import { fmtDate, fmtDateTime, initials, EXPORT_PERIODS, periodRange } from "@/lib/crm";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -118,16 +118,32 @@ export default function Settings() {
     if (label && label !== o.label) patchOption(o, { label });
   };
 
-  const exportCsv = async () => {
+  // Export by date created: quick ranges fill the two dates; "custom" lets the user type them.
+  const [expPeriod, setExpPeriod] = useState("today");
+  const [expStart, setExpStart] = useState(() => periodRange("today")[0]);
+  const [expEnd, setExpEnd] = useState(() => periodRange("today")[1]);
+  const pickExpPeriod = (p) => {
+    setExpPeriod(p);
+    if (p !== "custom") { const [s, e] = periodRange(p); setExpStart(s); setExpEnd(e); }
+  };
+  const expError = !expStart || !expEnd ? "Select both a start date and an end date."
+    : expEnd < expStart ? "End date can't be before the start date." : "";
+
+  // range = [start, end] exports only leads created in that period; no range = every lead (as before).
+  const exportCsv = async (range) => {
+    const name = range ? `beet_leads_${range[0]}_to_${range[1]}.csv` : "beet_leads.csv";
+    const qs = range ? `?${new URLSearchParams({ start: range[0], end: range[1] })}` : "";
     try {
-      const res = await fetch(`${API}/export/leads.csv`, { headers: { Authorization: `Bearer ${localStorage.getItem("beet_token")}` } });
+      const res = await fetch(`${API}/export/leads.csv${qs}`, { headers: { Authorization: `Bearer ${localStorage.getItem("beet_token")}` } });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast.error(typeof body.detail === "string" ? `Export failed: ${body.detail}` : "Export failed"); return;
       }
+      const count = res.headers.get("X-Lead-Count");
+      if (range && count === "0") { toast.info("No leads were created in this period — nothing to export."); return; }
       const blob = await res.blob(); const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = "beet_leads.csv"; a.click();
-      toast.success("CSV exported");
+      const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+      toast.success(count ? `CSV exported (${count} lead${count === "1" ? "" : "s"})` : "CSV exported");
     } catch { toast.error("Export failed"); }
   };
 
@@ -205,7 +221,30 @@ export default function Settings() {
             <Card className="p-6">
               <h3 className="font-bold text-slate-900 mb-1">Data Export</h3>
               <p className="text-sm text-slate-500 mb-4">Download all CRM leads as a CSV file.</p>
-              <Button data-testid="export-csv-btn" onClick={exportCsv} className="gap-2"><Download size={16} /> Export CRM Data (CSV)</Button>
+              <Button data-testid="export-csv-btn" onClick={() => exportCsv()} className="gap-2"><Download size={16} /> Export CRM Data (CSV)</Button>
+
+              <div className="mt-6 pt-5 border-t border-border space-y-3">
+                <div>
+                  <h4 className="font-semibold text-slate-800">Export by date</h4>
+                  <p className="text-sm text-slate-500">Only leads created in the chosen period.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select data-testid="export-period-select" value={expPeriod} onChange={(e) => pickExpPeriod(e.target.value)} className="h-9 rounded-lg border border-border text-sm px-3 text-slate-600">
+                    {EXPORT_PERIODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                  {expPeriod === "custom" && (
+                    <>
+                      <input type="date" aria-label="Start date" data-testid="export-start" value={expStart} max={expEnd || undefined} onChange={(e) => setExpStart(e.target.value)} className="h-9 rounded-lg border border-border text-sm px-2 text-slate-600" />
+                      <span className="text-sm text-slate-400">to</span>
+                      <input type="date" aria-label="End date" data-testid="export-end" value={expEnd} min={expStart || undefined} onChange={(e) => setExpEnd(e.target.value)} className="h-9 rounded-lg border border-border text-sm px-2 text-slate-600" />
+                    </>
+                  )}
+                </div>
+                {expError
+                  ? <p data-testid="export-range-error" className="text-sm text-rose-600">{expError}</p>
+                  : <p data-testid="export-range-label" className="text-sm text-slate-600">Leads created <b>{expStart === expEnd ? fmtDate(`${expStart}T00:00`) : `${fmtDate(`${expStart}T00:00`)} – ${fmtDate(`${expEnd}T00:00`)}`}</b></p>}
+                <Button data-testid="export-range-btn" variant="outline" disabled={!!expError} onClick={() => exportCsv([expStart, expEnd])} className="gap-2"><Download size={16} /> Export this period (CSV)</Button>
+              </div>
             </Card>
           )}
           {isManager && (

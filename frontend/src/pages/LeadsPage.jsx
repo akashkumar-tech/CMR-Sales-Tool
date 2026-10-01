@@ -12,7 +12,11 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
-import { Search, MoreVertical } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Search, MoreVertical, Pencil, Trash2 } from "lucide-react";
+
+// URL params set by a Reports drill-down and passed straight to GET /leads.
+const REPORT_PARAMS = ["period", "start", "end", "owner_team"];
 
 export default function LeadsPage({ scope }) {
   const { isManager } = useAuth();
@@ -34,6 +38,7 @@ export default function LeadsPage({ scope }) {
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [savedFilters, setSavedFilters] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
+  const [checked, setChecked] = useState(() => new Set());
   const tableFields = customFields.filter((f) => f.show_in_table && !f.archived);
 
   const loadSaved = () => api.get("/saved-filters").then((r) => setSavedFilters(r.data)).catch(() => {});
@@ -67,8 +72,15 @@ export default function LeadsPage({ scope }) {
     if (team !== "all") p.set("team", team);
     if (followUp !== "all") p.set("follow_up", followUp);
     if (showArchived) p.set("archived", "true");
+    REPORT_PARAMS.forEach((k) => { if (params.get(k)) p.set(k, params.get(k)); });
     api.get(`/leads?${p.toString()}`).then((r) => setLeads(r.data)).catch(() => {});
-  }, [scope, search, status, owner, source, team, followUp, showArchived]);
+  }, [scope, search, status, owner, source, team, followUp, showArchived, params]);
+  // Filter carried over from a Reports drill-down (funnel step / period / team).
+  const reportFilter = [
+    params.get("period") && (params.get("period") === "custom" ? `created ${params.get("start")} – ${params.get("end")}` : `created this ${params.get("period")}`),
+    params.get("owner_team") && `team ${params.get("owner_team")}`,
+  ].filter(Boolean).join(" · ");
+  const clearReportFilter = () => setParams((sp) => { REPORT_PARAMS.forEach((k) => sp.delete(k)); return sp; });
 
   useEffect(() => { api.get("/users").then((r) => setMembers(r.data)).catch(() => {}); api.get("/teams").then((r) => setTeams(r.data)).catch(() => {}); loadSaved(); }, []);
   useEffect(() => { load(); }, [load]);
@@ -77,6 +89,20 @@ export default function LeadsPage({ scope }) {
 
   const openLead = (id, t = "overview") => { setSelected(id); setTab(t); setOpen(true); };
   const overdue = (d) => d && d < localToday();
+
+  // Row selection: only leads still in the current (filtered) list count as selected.
+  const picked = leads.filter((l) => checked.has(l.id));
+  const allPicked = leads.length > 0 && picked.length === leads.length;
+  const toggle = (id) => setChecked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setChecked(allPicked ? new Set() : new Set(leads.map((l) => l.id)));
+  const deletePicked = async () => {
+    if (!window.confirm(`Delete ${picked.length} lead${picked.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+    try {
+      const { data } = await api.post("/leads/bulk-delete", { ids: picked.map((l) => l.id) });
+      toast.success(`${data.deleted} lead${data.deleted === 1 ? "" : "s"} deleted`);
+      setChecked(new Set()); load();
+    } catch (e) { toast.error(apiError(e)); }
+  };
 
   const doAction = async (l, action) => {
     if (["view", "log", "demo", "history"].includes(action)) return openLead(l.id, action === "view" ? "overview" : action);
@@ -117,7 +143,7 @@ export default function LeadsPage({ scope }) {
         </Select>
         <Select value={followUp} onValueChange={(v) => { setFollowUp(v); setParams((sp) => { v === "all" ? sp.delete("follow_up") : sp.set("follow_up", v); return sp; }); }}>
           <SelectTrigger data-testid="filter-followup" className="w-36"><SelectValue placeholder="Follow-up" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">Any Follow-up</SelectItem><SelectItem value="overdue">Overdue</SelectItem><SelectItem value="today">Due Today</SelectItem><SelectItem value="upcoming">Upcoming</SelectItem></SelectContent>
+          <SelectContent><SelectItem value="all">Any Follow-up</SelectItem><SelectItem value="pending">Pending (all dates)</SelectItem><SelectItem value="overdue">Overdue</SelectItem><SelectItem value="today">Due Today</SelectItem><SelectItem value="upcoming">Upcoming</SelectItem></SelectContent>
         </Select>
         <Select value={source} onValueChange={setSource}>
           <SelectTrigger data-testid="filter-source" className="w-36"><SelectValue placeholder="Source" /></SelectTrigger>
@@ -140,11 +166,28 @@ export default function LeadsPage({ scope }) {
         </label>
       </Card>
 
+      {reportFilter && (
+        <div data-testid="report-filter-banner" className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-accent px-4 py-2 text-sm text-slate-700">
+          <span>From Reports: <b>{reportFilter}</b></span>
+          <button data-testid="report-filter-clear" onClick={clearReportFilter} className="text-xs font-semibold text-primary hover:underline">Show all leads</button>
+        </div>
+      )}
+
+      {picked.length > 0 && (
+        <Card className="p-3 flex flex-wrap items-center gap-3" data-testid="bulk-actions-bar">
+          <span className="text-sm font-semibold text-slate-700">{picked.length} selected</span>
+          <Button size="sm" variant="outline" data-testid="bulk-edit-btn" disabled={picked.length !== 1} title={picked.length !== 1 ? "Select a single lead to edit" : undefined} onClick={() => openLead(picked[0].id)} className="gap-1.5"><Pencil size={14} /> Edit</Button>
+          {isManager && <Button size="sm" variant="destructive" data-testid="bulk-delete-btn" onClick={deletePicked} className="gap-1.5"><Trash2 size={14} /> Delete {picked.length}</Button>}
+          <button data-testid="bulk-clear-btn" onClick={() => setChecked(new Set())} className="text-xs text-slate-500 hover:text-slate-800">Clear selection</button>
+        </Card>
+      )}
+
       <Card className="overflow-hidden">
         <div className="overflow-x-auto scrollbar-thin">
           <table className="w-full text-sm whitespace-nowrap">
             <thead className="bg-slate-50 text-slate-500 text-left">
               <tr>
+                <th className="pl-4 py-3 w-8"><input type="checkbox" data-testid="select-all-leads" aria-label="Select all leads" checked={allPicked} onChange={toggleAll} /></th>
                 <th className="px-4 py-3 font-semibold">Lead</th>
                 <th className="px-4 py-3 font-semibold">Contact</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
@@ -160,7 +203,8 @@ export default function LeadsPage({ scope }) {
             </thead>
             <tbody>
               {leads.map((l) => (
-                <tr key={l.id} data-testid={`lead-row-${l.id}`} className="border-t border-border hover:bg-slate-50">
+                <tr key={l.id} data-testid={`lead-row-${l.id}`} className={`border-t border-border hover:bg-slate-50 ${checked.has(l.id) ? "bg-primary/5" : ""}`}>
+                  <td className="pl-4 py-3"><input type="checkbox" data-testid={`select-lead-${l.id}`} aria-label={`Select ${l.name}`} checked={checked.has(l.id)} onChange={() => toggle(l.id)} /></td>
                   <td className="px-4 py-3 cursor-pointer" onClick={() => openLead(l.id)}><p className="font-semibold text-slate-900">{l.name}</p><p className="text-xs text-slate-500">{l.practice || "—"}</p></td>
                   <td className="px-4 py-3 text-slate-600">{l.phone || l.email || "—"}</td>
                   <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${stageStyle(l.status)}`}>{l.status}</span>{l.lost_reason ? <span className="block text-[11px] text-rose-600 mt-0.5" data-testid={`lead-reason-${l.id}`}>{l.lost_reason}</span> : null}</td>
@@ -188,7 +232,7 @@ export default function LeadsPage({ scope }) {
                   </td>
                 </tr>
               ))}
-              {leads.length === 0 && <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">No leads found.</td></tr>}
+              {leads.length === 0 && <tr><td colSpan={13}className="px-4 py-10 text-center text-slate-400">No leads found.</td></tr>}
             </tbody>
           </table>
         </div>

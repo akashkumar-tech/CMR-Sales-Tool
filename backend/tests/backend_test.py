@@ -332,7 +332,8 @@ class TestAssignment:
             assert h.status_code == 200
             body = h.json()
             assert any(a["to"] == leo["user"]["id"] for a in body["assignments"])
-            assert any(a.get("field") == "owner" and a.get("new") == leo["user"]["id"] for a in body["audit"])
+            # the audit log records people by name (it's shown as-is in the Audit Log)
+            assert any(a.get("field") == "owner" and a.get("new") == leo["user"]["name"] for a in body["audit"])
         finally:
             requests.delete(f"{API}/leads/{lid}", headers=_h(mgr["token"]))
 

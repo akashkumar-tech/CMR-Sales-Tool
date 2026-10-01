@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { api, apiError } from "@/lib/api";
-import { useOptions } from "@/context/OptionsContext";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,24 +8,51 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Upload, FileSpreadsheet } from "lucide-react";
 
 const CRM_FIELDS = [
-  ["name", "Lead Name"], ["phone", "Phone"], ["email", "Email"], ["instagram", "Instagram"],
-  ["linkedin", "LinkedIn"], ["practice", "Practice / Clinic"], ["location", "Location"],
-  ["source", "Source"], ["status", "Status"], ["notes", "Notes"],
+  ["name", "Lead Name"], ["phone", "Phone / Contact"], ["email", "Email"], ["status", "Status"],
+  ["owner", "Owner"], ["last_interaction_at", "Last Interaction"], ["total_interactions", "Total Interactions"],
+  ["next_follow_up", "Next Follow-up"], ["demo_status", "Demo"], ["payment_status", "Payment"],
+  ["notes", "Notes"], ["practice", "Practice / Clinic"], ["location", "Location"],
+  ["source", "Source"], ["instagram", "Instagram"], ["linkedin", "LinkedIn"],
 ];
 
 const normHeader = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+const HEADER_ALIASES = {
+  name: ["lead", "lead name", "name", "client", "customer"],
+  phone: ["phone", "contact", "mobile", "whatsapp", "phone number", "contact no", "contact number", "cell", "tel"],
+  email: ["email", "e mail", "email address"],
+  status: ["status", "stage", "lead status"],
+  owner: ["owner", "lead owner", "assigned to", "assignee", "rep", "agent"],
+  last_interaction_at: ["last interaction", "last contact", "last contacted", "last interaction at", "last touch"],
+  total_interactions: ["total", "total interactions", "touches", "interaction count"],
+  next_follow_up: ["next follow up", "next follow-up", "next contact", "follow up", "follow-up", "followup", "next followup"],
+  demo_status: ["demo", "demo status"],
+  payment_status: ["payment", "payment status"],
+  notes: ["notes", "note", "remarks", "comments"],
+  practice: ["practice", "clinic", "hospital", "practice clinic", "company", "organization"],
+  location: ["location", "city", "address", "area", "state"],
+  source: ["source", "lead source", "channel"],
+  instagram: ["instagram", "ig", "insta"],
+  linkedin: ["linkedin", "li"],
+};
 
 // Checked in order: specific fields come before "name" so headers like "Clinic Name" or
 // "Instagram Username" aren't taken as the lead's name.
 const FIELD_RULES = [
   ["email", /e ?mail/],
-  ["phone", /phone|mobile|whats ?app|contact (no|num|number)|\bcell\b|\bmob\b|\btel\b/],
+  ["phone", /phone|mobile|whats ?app|\bcontact\b(?!\s*person)|\bcell\b|\bmob\b|\btel\b/],
   ["instagram", /insta|\big\b/],
   ["linkedin", /linked ?in/],
   ["practice", /practice|clinic|hospital|company|organi[sz]ation|business/],
   ["location", /location|city|address|\barea\b|\bstate\b|region|country/],
   ["source", /source|channel/],
   ["status", /status|stage/],
+  ["owner", /owner|assigned|assignee|\brep\b|agent/],
+  ["last_interaction_at", /last (interaction|contact)|interaction/],
+  ["total_interactions", /\btotal\b|interaction count|touches/],
+  ["next_follow_up", /next (follow|contact)|follow ?up|followup/],
+  ["demo_status", /\bdemo\b/],
+  ["payment_status", /\bpayment\b|paid/],
   ["notes", /note|remark|comment/],
   ["name", /name|\blead\b|doctor|\bdr\b|client|customer|contact person/],
 ];
@@ -35,11 +61,15 @@ function guessMapping(columns) {
   const m = {};
   const used = new Set();
   const take = (field, col) => { if (!m[field] && !used.has(col)) { m[field] = col; used.add(col); } };
-  // Exact header matches ("Name", "Lead Name", "Phone") win over partial ones.
+  // Exact & alias header matches ("Name", "Lead Name", "Contact", "Phone") win over regex rules.
   columns.forEach((col) => {
     const h = normHeader(col);
-    const hit = CRM_FIELDS.find(([f, label]) => h === f || h === normHeader(label));
-    if (hit) take(hit[0], col);
+    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+      if (aliases.includes(h) || h === field) {
+        take(field, col);
+        break;
+      }
+    }
   });
   columns.forEach((col) => {
     const h = normHeader(col);
@@ -83,7 +113,7 @@ export default function ImportPanel() {
   return (
     <Card className="p-6 space-y-4">
       <div className="flex items-center gap-2"><FileSpreadsheet size={18} className="text-primary" /><h3 className="font-bold text-slate-900">Tracker Import (CSV / Excel)</h3></div>
-      <p className="text-sm text-slate-500">Upload your existing tracker, map the columns, and we'll import new records while skipping duplicates (matched by phone/email).</p>
+      <p className="text-sm text-slate-500">Upload your existing tracker, map the columns, and we'll import new records while skipping duplicates (a row is a duplicate only when every column matches a row that was already imported). The Owner column decides who owns each lead; rows whose owner isn't a team member are listed for review.</p>
       <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={onFile} className="hidden" data-testid="import-file-input" />
       <Button onClick={() => fileRef.current?.click()} disabled={busy} className="gap-2" data-testid="import-upload-btn"><Upload size={16} /> {busy ? "Working…" : "Choose file"}</Button>
 

@@ -16,7 +16,7 @@ from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
 from zoneinfo import ZoneInfo
 from html import escape
-import re, io, csv, uuid, random, logging, hashlib, asyncio
+import re, io, csv, uuid, random, logging, hashlib, asyncio, difflib
 import jwt, httpx
 
 mongo_url = os.environ['MONGO_URL']
@@ -499,18 +499,19 @@ def _digest_html(u, d, note=None, sender=None):
     """Daily plan email. With `note`, it's a manager's manual reminder: their message first, then the plan if any."""
     def section(title, items):
         return (f'<h3 style="margin:18px 0 6px">{escape(title)}</h3><ul>{"".join(items)}</ul>') if items else ""
+    link = (lambda path, text: "") if note else _crm_link   # manual reminders: message only, no CRM links
     overdue_ids = {l["id"] for l in d["overdue"]}
     fu = [f'<li>{escape(l["name"])} — {escape(l.get("practice") or "")} (follow-up {escape(l["next_follow_up"][:10])}'
-          f'{", overdue" if l["id"] in overdue_ids else ""}){_crm_link("/dashboard?open=" + l["id"], "Open")}</li>'
+          f'{", overdue" if l["id"] in overdue_ids else ""}){link("/dashboard?open=" + l["id"], "Open")}</li>'
           for l in d["overdue"] + d["due"]]
     tk = [f'<li>{escape(t.get("title") or "Task")} — due {escape(t["due_date"][:10])}'
           f'{" " + escape(t["due_time"]) if t.get("due_time") else ""} · {escape(t.get("priority") or "Medium")}'
-          f'{_crm_link("/dashboard?open=" + t["lead_id"], "Open lead") if t.get("lead_id") else ""}</li>' for t in d["tasks"]]
+          f'{link("/dashboard?open=" + t["lead_id"], "Open lead") if t.get("lead_id") else ""}</li>' for t in d["tasks"]]
     dm = [f'<li>{escape(l.get("demo_time") or "time not set")} — demo with {escape(l["name"])}'
-          f'{_crm_link("/dashboard?open=" + l["id"], "Open")}</li>' for l in d["demos"]]
+          f'{link("/dashboard?open=" + l["id"], "Open")}</li>' for l in d["demos"]]
     button = (f'<p style="margin:18px 0"><a href="{escape(APP_URL)}/dashboard" style="background:#E11D6B;color:#fff;'
               f'text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;display:inline-block">Open CRM</a></p>'
-              if APP_URL.startswith("https://") else "")
+              if APP_URL.startswith("https://") and not note else "")
     counts = (f'you have <b>{len(d["due"])}</b> follow-ups due today, <b>{len(d["overdue"])}</b> overdue, '
               f'<b>{len(d["tasks"])}</b> tasks and <b>{len(d["demos"])}</b> demos.')
     if note:
@@ -1062,6 +1063,9 @@ async def list_leads(request: Request, user: dict = Depends(get_current_user)):
             q["next_follow_up"] = today
         elif fu == "upcoming":
             q["next_follow_up"] = {"$gt": today}
+        elif fu == "pending":   # every follow-up still to do, whatever its date — Reports' "Follow-ups pending"
+            q["next_follow_up"] = HAS_DATE
+            q["status"] = {"$nin": TERMINAL}
     if not p.get("include_archived") and p.get("archived") != "true":
         q["archived"] = {"$ne": True}
     elif p.get("archived") == "true":
@@ -1078,7 +1082,16 @@ async def list_leads(request: Request, user: dict = Depends(get_current_user)):
     if sort_field not in ("created_at", "updated_at", "name", "status", "next_follow_up", "last_interaction_at"):
         sort_field = "created_at"
     order = -1 if (p.get("order") or "desc") == "desc" else 1
-    leads = await db.leads.find(q).sort(sort_field, order).to_list(3000)
+    # Case-insensitive ordering for text (otherwise "apollo" sorts after "Zeta").
+    collation = {"locale": "en", "strength": 2} if sort_field in ("name", "status") else None
+    # Drill-down from Reports: the same period / team scope the report was counted with.
+    if p.get("period"):
+        s, e = period_bounds(p.get("period"), p.get("start"), p.get("end"))
+        if s and e:
+            q["created_at"] = {"$gte": s, "$lte": e}
+    if p.get("owner_team") and is_manager(user):
+        q["owner"] = {"$in": [u["id"] for u in await db.users.find({"team": p.get("owner_team")}).to_list(500)]}
+    leads = await db.leads.find(q, collation=collation).sort(sort_field, order).to_list(3000)
     return [clean(l) for l in leads]
 
 @api.get("/leads/search")
@@ -1351,6 +1364,11 @@ async def delete_lead(lid: str, mgr: dict = Depends(require_manager)):
     lead = await db.leads.find_one({"id": lid})
     if not lead:
         raise HTTPException(404, "Not found")
+    await _delete_lead(lead, mgr)
+    return {"ok": True}
+
+async def _delete_lead(lead, mgr):
+    lid = lead["id"]
     await db.leads.delete_one({"id": lid})
     await db.activities.delete_many({"lead_id": lid})
     # Remove work items that only make sense with the lead (the audit trail is kept).
@@ -1358,7 +1376,17 @@ async def delete_lead(lid: str, mgr: dict = Depends(require_manager)):
     await db.assignments.delete_many({"lead_id": lid})
     await db.notifications.delete_many({"link": f"/dashboard?open={lid}"})
     await audit(mgr, "delete", "lead", lid, detail=lead.get("name", ""))
-    return {"ok": True}
+
+class BulkDeleteIn(BaseModel):
+    ids: List[str]
+
+@api.post("/leads/bulk-delete")
+async def bulk_delete_leads(body: BulkDeleteIn, mgr: dict = Depends(require_manager)):
+    """Delete the leads ticked in the All Leads table — same clean-up and audit entry as a single delete."""
+    leads = await db.leads.find({"id": {"$in": body.ids[:3000]}}).to_list(3000)
+    for lead in leads:
+        await _delete_lead(lead, mgr)
+    return {"deleted": len(leads)}
 
 # ---------- activities ----------
 @api.get("/activities")
@@ -1528,7 +1556,8 @@ async def compute_metrics(emp_id, s, e):
     lq = {"added_by": emp_id}
     if s and e: lq["created_at"] = {"$gte": s, "$lte": e}
     leads_added = await db.leads.count_documents(lq)
-    owned = await db.leads.find({"owner": emp_id}).to_list(5000)
+    # Archived leads are left out, like the lead lists these counts open (and the Reports page).
+    owned = await db.leads.find({"owner": emp_id, "archived": {"$ne": True}}).to_list(5000)
     ls = lambda st: sum(1 for l in owned if l.get("status") == st)
     tq = {"assigned_to": emp_id, "status": "Completed"}
     if s and e: tq["completed_at"] = {"$gte": s, "$lte": e}
@@ -1568,17 +1597,24 @@ async def my_perf(request: Request, user: dict = Depends(get_current_user)):
     return {"employee_id": user["id"], "name": user["name"], **await compute_metrics(user["id"], s, e)}
 
 # ---------- reports ----------
-# Funnel steps (label -> representative pipeline status; None = all leads). Cumulative "reached" by pipeline order.
+# Funnel steps (label -> lead status; None = all leads). Each step is the number of leads whose status is
+# exactly that one — the same leads All Leads lists under that status filter. Demo-pipeline data is not used here.
 FUNNEL_STEPS = [("Leads Generated", None), ("People Contacted", "Contacted"), ("Any Reply", "Replied"),
                 ("Idea Explained", "Replied"), ("Interested / Asked for Demo", "Interested"),
                 ("Demo Booked", "Demo Booked"), ("Demo Completed", "Demo Completed"),
                 ("Commercials Opened / Invoice Raised", "Invoice Raised"), ("Invoice Paid", "Paid"),
                 ("Clients Added", "Converted")]
 LOST_STATUSES = ["Lost", "Not Interested", "Closed"]
-# Side-branch stages sit later in the pipeline order than the step they actually imply. For the funnel they
-# count as having reached only this main-path stage (None = counted in "Leads Generated" only).
-FUNNEL_SIDE_BRANCH = {"Demo No-show": "Demo Booked", "Rescheduled": "Demo Booked",
-                      "Not Paid": "Invoice Raised", "Other": None}
+DEMO_STAGES = ("Demo Booked", "Demo Completed", "Demo No-show", "Rescheduled")
+
+# Demo Pipeline (the Demos page) — used only by the "Demos" / "Demos completed" tiles, never by the funnel.
+def lead_has_demo(l):
+    """A demo was booked for this lead — the same rule the Demos page lists by."""
+    return bool(l.get("demo_date") or l.get("demo_status") or l.get("status") in DEMO_STAGES)
+
+def lead_demo_done(l):
+    return bool(l.get("status") == "Demo Completed" or l.get("demo_status") == "Completed" or l.get("demo_completed_at"))
+
 OUTREACH_TYPES = ("Call", "WhatsApp", "Instagram", "LinkedIn", "Email")
 
 @api.get("/reports")
@@ -1609,25 +1645,22 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
         st = l.get("status", "New Lead"); by_stage[st] = by_stage.get(st, 0) + 1
         src = l.get("source") or "Unknown"; by_source[src] = by_source.get(src, 0) + 1
 
-    order_of = {lab: i for i, lab in enumerate(stages)}
+    # Leads per owner — the same count All Leads gives under each Owner filter. Every active team member is
+    # listed (0 included); leads with no owner are shown as "Unassigned".
+    owned = {}
+    for l in leads:
+        owned[l.get("owner") or ""] = owned.get(l.get("owner") or "", 0) + 1
+    by_owner = [{"owner_id": u["id"], "name": u["name"], "count": owned.get(u["id"], 0)}
+                for u in await db.users.find({}).sort("name", 1).to_list(1000)
+                if owned.get(u["id"]) or (u.get("active") and (scope_ids is None or u["id"] in scope_ids))]
+    if owned.get(""):
+        by_owner.append({"owner_id": "", "name": "Unassigned", "count": owned[""]})
+    by_owner.sort(key=lambda r: -r["count"])
     lost = sum(1 for l in leads if l.get("status") in LOST_STATUSES)
     total_leads = len(leads)
-    def reached_count(status_label):
-        thr = order_of.get(status_label)
-        if thr is None:
-            return 0
-        n = 0
-        for l in leads:
-            st = l.get("status")
-            if st in LOST_STATUSES:
-                continue
-            eff = FUNNEL_SIDE_BRANCH.get(st, st) if st in FUNNEL_SIDE_BRANCH else st
-            if eff is not None and order_of.get(eff, -1) >= thr:
-                n += 1
-        return n
     funnel = []
     for lab, st in FUNNEL_STEPS:
-        cnt = total_leads if st is None else reached_count(st)
+        cnt = total_leads if st is None else by_stage.get(st, 0)
         funnel.append({"stage": lab, "status": st, "count": cnt, "pct": round(cnt / total_leads * 100) if total_leads else 0})
     # Average days from Demo Completed -> Invoice Paid (real dates only)
     diffs = []
@@ -1655,14 +1688,19 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
     acts = await db.activities.find(aq).to_list(8000)
     by_channel = {}
     daily = {}
-    outreach = responses = follow_ups = 0
+    outreach = follow_ups = 0
     for a in acts:
         t = a.get("type", "")
         by_channel[t] = by_channel.get(t, 0) + 1
-        d = a["timestamp"][:10]; daily[d] = daily.get(d, 0) + 1
+        try:   # chart by the team's local day, not the UTC date of the stored timestamp
+            d = datetime.fromisoformat(a["timestamp"]).astimezone(APP_TZ).date().isoformat()
+        except ValueError:
+            d = a["timestamp"][:10]
+        daily[d] = daily.get(d, 0) + 1
         if t in OUTREACH_TYPES: outreach += 1
-        if a.get("outcome"): responses += 1
         if t == "Follow-up": follow_ups += 1
+    # Follow-ups still to do on these leads — the leads All Leads lists under Follow-up = "Pending".
+    follow_ups_open = sum(1 for l in leads if l.get("next_follow_up") and l.get("status") not in TERMINAL)
 
     by_employee = []
     if is_manager(user):
@@ -1673,13 +1711,16 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
                 continue
             by_employee.append({"name": m["name"], "count": sum(1 for a in acts if a.get("employee_id") == m["id"])})
 
-    demos = by_stage.get("Demo Booked", 0) + by_stage.get("Demo Completed", 0)
-    sales = {"leads": len(leads), "outreach": outreach, "responses": responses, "demos": demos,
-             "trials": by_stage.get("Trial", 0), "follow_ups": follow_ups,
+    demos = sum(1 for l in leads if lead_has_demo(l))
+    # Responses = leads whose status is "Replied" (what All Leads lists for that status), not activity outcomes.
+    sales = {"leads": len(leads), "outreach": outreach, "responses": by_stage.get("Replied", 0), "demos": demos,
+             "demos_completed": sum(1 for l in leads if lead_demo_done(l)),
+             "trials": by_stage.get("Trial", 0), "follow_ups": follow_ups, "follow_ups_open": follow_ups_open,
              "invoices": by_stage.get("Invoice Raised", 0),
              "payments": by_stage.get("Paid", 0), "conversions": by_stage.get("Converted", 0), "losses": lost}
     return {"by_stage": [{"stage": k, "count": v} for k, v in by_stage.items()],
             "by_source": [{"source": k, "count": v} for k, v in by_source.items()],
+            "by_owner": by_owner,
             "by_channel": [{"channel": k, "count": v} for k, v in by_channel.items()],
             "by_employee": by_employee,
             "daily": [{"date": k, "count": v} for k, v in sorted(daily.items())[-30:]],
@@ -1703,8 +1744,19 @@ def csv_safe(v):
     return v
 
 @api.get("/export/leads.csv")
-async def export_csv(mgr: dict = Depends(require_manager)):
-    leads = await db.leads.find({}).to_list(20000)
+async def export_csv(start: Optional[str] = None, end: Optional[str] = None, mgr: dict = Depends(require_manager)):
+    # Optional date range (YYYY-MM-DD, both inclusive) on the lead's creation date — the "Date Created" column,
+    # and the date Reports counts leads by. Days are the team's local calendar days (APP_TIMEZONE).
+    q, filename = {}, "beet_leads.csv"
+    if start or end:
+        if not (start and end):
+            raise HTTPException(400, "Select both a start date and an end date")
+        s, e = period_bounds("custom", start, end)
+        if e <= s:
+            raise HTTPException(400, "End date can't be before the start date")
+        q["created_at"] = {"$gte": s, "$lt": e}
+        filename = f"beet_leads_{start[:10]}_to_{end[:10]}.csv"
+    leads = await db.leads.find(q).to_list(20000)
     users = {u["id"]: u["name"] for u in await db.users.find({}).to_list(1000)}
     buf = io.StringIO(); w = csv.writer(buf)
     w.writerow(["Name", "Phone", "Email", "Instagram", "LinkedIn", "Practice", "Location", "Source", "Owner",
@@ -1721,7 +1773,8 @@ async def export_csv(mgr: dict = Depends(require_manager)):
                     l.get("notes", ""), l.get("created_at", "")]])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=beet_leads.csv"})
+                             headers={"Content-Disposition": f"attachment; filename={filename}",
+                                      "X-Lead-Count": str(len(leads))})
 
 class CustomFieldIn(BaseModel):
     label: str
@@ -1809,6 +1862,58 @@ def _import_cell(v):
 def _stage_key(s):
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
+from dateutil import parser as date_parser
+
+_IMPORT_MONTH_RE = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
+
+def _import_dt(s):
+    """Date found in a tracker cell ("24 Sep", "03/10/2026", "Demo 14 Aug · MOU st", Excel's "2026-09-24 00:00:00"),
+    or None when the cell holds no recognisable date — date fields must never store free text."""
+    s = str(s or "").strip()
+    if not s or not re.search(r"\d", s):
+        return None
+    default = datetime(datetime.now(APP_TZ).year, 1, 1)
+    try:
+        if re.match(r"\d{4}-\d{1,2}-\d{1,2}", s):     # ISO / Excel date cell: never day-first
+            return date_parser.parse(s, default=default)
+        if not (_IMPORT_MONTH_RE.search(s) or re.search(r"\d{1,4}[/.\-]\d{1,2}", s)):
+            return None                                # "3 calls", "1" — a number, not a date
+        return date_parser.parse(s, fuzzy=True, dayfirst=True, default=default)
+    except Exception:
+        return None
+
+def _parse_import_date(s):
+    dt = _import_dt(s)
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+def _parse_import_datetime(s):
+    dt = _import_dt(s)
+    if not dt:
+        return None
+    if not dt.tzinfo:   # tracker dates are local wall-clock; timestamps are stored in UTC
+        dt = dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(timezone.utc).isoformat()
+
+IMPORT_BLANKS = ("", "—", "-", "none", "null", "n/a", "na", "unassigned")
+
+def _resolve_import_owner(raw, users):
+    """Match an Owner cell to exactly one active user: id / email / full name, then an unambiguous first or
+    last name ("Malayaz" -> "Kumar Malayaz"), name prefix ("Pari" -> "Paripsa Tripathi") or close spelling
+    ("Deepti" -> "Deepthi")."""
+    k = re.sub(r"\s+", " ", raw).strip().lower()
+    names = {u["id"]: re.sub(r"\s+", " ", u.get("name") or "").strip().lower() for u in users}
+    for u in users:
+        if k in (u["id"].lower(), (u.get("email") or "").strip().lower(), names[u["id"]]):
+            return u["id"]
+    close = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio() >= 0.85
+    for match in (lambda n: k in n.split(),
+                  lambda n: len(k) >= 3 and (any(w.startswith(k) for w in n.split()) or k.startswith(n.split()[0] + " ")),
+                  lambda n: close(k, n) or any(close(k, w) for w in n.split())):
+        hits = [uid for uid, n in names.items() if n and match(n)]
+        if hits:
+            return hits[0] if len(hits) == 1 else None   # never guess between two people
+    return None
+
 class ImportCommit(BaseModel):
     mapping: dict
     rows: List[dict]
@@ -1817,48 +1922,206 @@ class ImportCommit(BaseModel):
 @api.post("/import/commit")
 async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)):
     m = body.mapping
-    owner = body.owner or mgr["id"]
+    # Owner comes from the sheet whenever an Owner column is mapped. The importer (recorded as added_by) is only
+    # the owner when the file has no Owner column at all — same as a manually created lead.
+    owner_mapped = bool(m.get("owner"))
+    default_owner = body.owner or mgr["id"]
     imported = dups = invalid = 0
     details = []
-    seen_phone, seen_email, seen_ig, seen_li = set(), set(), set(), set()
-    # Match statuses ignoring case, spaces and punctuation ("follow up" -> "Follow-up", "demo no show" -> "Demo No-show").
-    stage_by_key = {_stage_key(o["label"]): o["label"]
-                    for o in await db.options.find({"type": "stage", "archived": {"$ne": True}}).to_list(200)}
-    def g(row, field):
-        col = m.get(field)
-        return str(row.get(col, "")).strip() if col else ""
+    seen_phone, seen_email, seen_rows = set(), set(), set()
+
+    # Preload active users for owner resolution
+    users_list = await db.users.find({"active": True}).to_list(1000)
+
+    # Match stages/statuses ignoring case, spaces and punctuation
+    stage_by_key = {_stage_key(s[0]): s[0] for s in DEFAULT_OPTIONS["stage"]}
+    for o in await db.options.find({"type": "stage", "archived": {"$ne": True}}).to_list(200):
+        stage_by_key[_stage_key(o["label"])] = o["label"]
+
+    demo_by_key = {_stage_key(s[0]): s[0] for s in DEFAULT_OPTIONS["demo_status"]}
+    for o in await db.options.find({"type": "demo_status", "archived": {"$ne": True}}).to_list(100):
+        demo_by_key[_stage_key(o["label"])] = o["label"]
+
+    payment_by_key = {_stage_key(s[0]): s[0] for s in DEFAULT_OPTIONS["payment_status"]}
+    for o in await db.options.find({"type": "payment_status", "archived": {"$ne": True}}).to_list(100):
+        payment_by_key[_stage_key(o["label"])] = o["label"]
+
+    source_by_key = {_stage_key(s[0]): s[0] for s in DEFAULT_OPTIONS["source"]}
+    for o in await db.options.find({"type": "source", "archived": {"$ne": True}}).to_list(100):
+        source_by_key[_stage_key(o["label"])] = o["label"]
+
+    def g(row, *fields):
+        for f in fields:
+            col = m.get(f)
+            if col and col in row:
+                val = str(row.get(col, "")).strip()
+                if val:
+                    return val
+        return ""
+
     for row in body.rows[:2000]:
-        name = g(row, "name")
+        name = g(row, "name", "lead")
         if not name:
             invalid += 1; details.append({"name": "(blank)", "status": "invalid", "reason": "missing name"}); continue
-        raw_status = g(row, "status")
+
+        raw_status = g(row, "status", "stage")
         status = stage_by_key.get(_stage_key(raw_status)) if raw_status else "New Lead"
+        if not status and raw_status:
+            status = {
+                "demodone": "Demo Completed",
+                "demoscheduled": "Demo Booked",
+                "noshow": "Demo No-show",
+                "followup": "Follow-up",
+                "paymentreceived": "Paid",
+                "won": "Converted",
+            }.get(_stage_key(raw_status))
         if not status:
             invalid += 1; details.append({"name": name, "status": "invalid", "reason": f"unknown status '{raw_status}'"}); continue
-        phone, email = g(row, "phone"), g(row, "email")
+
+        phone = g(row, "phone", "contact")
+        email = g(row, "email")
+        if not email and "@" in phone:
+            email = phone
+            phone = ""
+        elif not phone and re.search(r"\d{7,}", email) and "@" not in email:
+            phone = email
+            email = ""
+
         np_, ne = norm_phone(phone), norm_email(email) or None
-        ni, nl = norm_handle(g(row, "instagram")), norm_linkedin(g(row, "linkedin"))
-        is_dup = False
-        if np_ and (np_ in seen_phone or await db.leads.find_one({"normalized_phone": np_})): is_dup = True
-        if ne and (ne in seen_email or await db.leads.find_one({"normalized_email": ne})): is_dup = True
-        if ni and (ni in seen_ig or await db.leads.find_one({"normalized_instagram": ni})): is_dup = True
-        if nl and (nl in seen_li or await db.leads.find_one({"normalized_linkedin": nl})): is_dup = True
+        ni, nl = norm_handle(g(row, "instagram", "ig")), norm_linkedin(g(row, "linkedin", "li"))
+        practice = g(row, "practice", "clinic", "hospital")
+        location = g(row, "location", "city")
+        notes = g(row, "notes", "note")
+
+        # A row is a duplicate only when EVERY mapped column matches a row that was already imported (or an
+        # earlier row of this file) — two rows that merely share a phone or a name are different leads.
+        # The fingerprint is stored as import_key, so re-importing the same sheet skips the row even after
+        # the lead has been edited in the CRM.
+        row_key = hashlib.sha1("|".join(f"{f}={_stage_key(g(row, f))}" for f in sorted(m) if m.get(f)).encode()).hexdigest()
+        phone_lead = await db.leads.find_one({"normalized_phone": np_}) if np_ else None
+        email_lead = await db.leads.find_one({"normalized_email": ne}) if ne else None
+        # Leads imported before whole-row fingerprints existed: contact-less ones carry a name/practice/
+        # location/notes key (or none); ones with a contact are recognised by that contact plus name, status, notes.
+        legacy = [{"import_key": row_key}]
+        if not (np_ or ne or ni or nl):
+            no_contact = {f: {"$in": [None, ""]} for f in ("phone", "email", "instagram", "linkedin")}
+            legacy += [{"import_key": hashlib.sha1("|".join(_stage_key(x) for x in (name, practice, location, notes)).encode()).hexdigest()},
+                       {"import_key": {"$exists": False}, "name": name, "notes": notes, **no_contact}]
+        is_dup = (row_key in seen_rows or bool(await db.leads.find_one({"$or": legacy}))
+                  or any(l and not l.get("import_key") and _stage_key(l.get("name", "")) == _stage_key(name)
+                         and l.get("status") == status
+                         and re.split(r"\n?(?:Last interaction|Next follow-up): ", l.get("notes") or "")[0] == notes
+                         for l in (phone_lead, email_lead)))
         if is_dup:
             dups += 1; details.append({"name": name, "status": "duplicate"}); continue
+
+        # Owner resolution
+        lead_owner = default_owner
+        if owner_mapped:
+            raw_owner = g(row, "owner")
+            lead_owner = None   # blank / "Unassigned" stays unassigned — it does not fall back to the importer
+            if raw_owner.lower() not in IMPORT_BLANKS:
+                lead_owner = _resolve_import_owner(raw_owner, users_list)
+                if not lead_owner:
+                    invalid += 1; details.append({"name": name, "status": "invalid", "reason": f"unknown owner '{raw_owner}'"}); continue
+
+        # Last interaction
+        raw_last = g(row, "last_interaction_at", "last_interaction", "last_contact")
+        last_interaction_at = _parse_import_datetime(raw_last)
+
+        # Total interactions
+        raw_total = g(row, "total_interactions", "total")
+        total_interactions = 0
+        if raw_total:
+            try:
+                total_interactions = int(float(raw_total))
+            except (ValueError, TypeError):
+                total_interactions = 0
+        elif last_interaction_at:
+            total_interactions = 1
+
+        # Next follow-up
+        raw_next = g(row, "next_follow_up", "follow_up", "next_followup")
+        next_follow_up = _parse_import_date(raw_next)
+
+        # Demo status
+        raw_demo = g(row, "demo_status", "demo")
+        demo_status = None
+        if raw_demo:
+            dk = _stage_key(raw_demo)
+            demo_status = demo_by_key.get(dk) or {
+                "booked": "Scheduled",
+                "scheduled": "Scheduled",
+                "done": "Completed",
+                "doneprev": "Completed",
+                "completed": "Completed",
+                "noshow": "No-show",
+                "cancelled": "Cancelled",
+                "rescheduled": "Rescheduled",
+            }.get(dk) or raw_demo.strip()
+
+        # Payment status
+        raw_payment = g(row, "payment_status", "payment")
+        payment_status = None
+        if raw_payment:
+            pk = _stage_key(raw_payment)
+            payment_status = payment_by_key.get(pk) or raw_payment.strip()
+
+        # Source
+        raw_source = g(row, "source", "channel")
+        source = (source_by_key.get(_stage_key(raw_source)) if raw_source else None) or raw_source or "Import"
+
+        # Text in a date column that isn't just a date ("Demo 14 Aug · MOU st", "next week") is kept in the notes.
+        extra = [f"{label}: {raw}" for label, raw, parsed in (("Last interaction", raw_last, last_interaction_at),
+                                                             ("Next follow-up", raw_next, next_follow_up))
+                 if _stage_key(raw) not in ("", "none", "null", "na")
+                 and (not parsed or re.search(r"[a-z]{4,}", _IMPORT_MONTH_RE.sub("", raw.lower())))]
+        if extra:
+            notes = "\n".join([notes] * bool(notes) + extra)
+
         lid = str(uuid.uuid4())
-        doc = {"id": lid, "name": name, "phone": phone, "email": email, "instagram": g(row, "instagram"),
-               "linkedin": g(row, "linkedin"), "practice": g(row, "practice"), "location": g(row, "location"),
-               "source": g(row, "source") or "Import", "status": status, "owner": owner,
-               "team": "", "added_by": mgr["id"], "added_by_name": mgr["name"], "notes": g(row, "notes"),
-               "next_follow_up": None, "followup_assigned_to": owner, "demo_date": None, "demo_status": None,
-               "demo_owner": None, "invoice_status": None, "payment_status": None, "conversion_status": "Open",
-               "custom": {}, "response": "", "last_interaction_at": None, "last_contacted_by": None,
-               "last_contacted_by_name": None, "last_contact_method": None, "total_interactions": 0,
-               "created_at": now_iso(), "updated_at": now_iso(), "version": 1}
-        if np_: doc["normalized_phone"] = np_; seen_phone.add(np_)
-        if ne: doc["normalized_email"] = ne; seen_email.add(ne)
-        if ni: doc["normalized_instagram"] = ni; seen_ig.add(ni)
-        if nl: doc["normalized_linkedin"] = nl; seen_li.add(nl)
+        doc = {
+            "id": lid,
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "instagram": g(row, "instagram", "ig"),
+            "linkedin": g(row, "linkedin", "li"),
+            "practice": practice,
+            "location": location,
+            "source": source,
+            "status": status,
+            "owner": lead_owner,
+            "team": "",
+            "added_by": mgr["id"],
+            "added_by_name": mgr["name"],
+            "notes": notes,
+            "next_follow_up": next_follow_up,
+            "followup_assigned_to": lead_owner,
+            "demo_date": None,
+            "demo_status": demo_status,
+            "demo_owner": lead_owner if demo_status else None,
+            "invoice_status": None,
+            "payment_status": payment_status,
+            "conversion_status": "Converted" if status == "Converted" else "Open",
+            "custom": {},
+            "response": "",
+            "last_interaction_at": last_interaction_at,
+            "last_contacted_by": None,
+            "last_contacted_by_name": None,
+            "last_contact_method": None,
+            "total_interactions": total_interactions,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "version": 1
+        }
+        # normalized_phone / normalized_email are unique in the database: when another lead already holds the
+        # contact, this lead is still imported but only the first one carries the unique key.
+        if np_ and not phone_lead and np_ not in seen_phone: doc["normalized_phone"] = np_; seen_phone.add(np_)
+        if ne and not email_lead and ne not in seen_email: doc["normalized_email"] = ne; seen_email.add(ne)
+        if ni: doc["normalized_instagram"] = ni
+        if nl: doc["normalized_linkedin"] = nl
+        doc["import_key"] = row_key; seen_rows.add(row_key)
         try:
             await db.leads.insert_one(dict(doc)); imported += 1; details.append({"name": name, "status": "imported"})
         except DuplicateKeyError:
@@ -2096,8 +2359,8 @@ async def demo_complete(lid: str, body: DemoCompleteIn, user: dict = Depends(get
 
 @api.get("/calendar")
 async def calendar(request: Request, user: dict = Depends(get_current_user)):
-    """Demos and follow-ups come from the lead itself; tasks from tasks. Cancelled items, archived leads and open
-    work on lost/closed leads are left out; completed items are kept but flagged done."""
+    """Demos and follow-ups come from the lead itself; tasks from tasks. Cancelled / no-show items, archived leads
+    and open work on lost/closed leads are left out; completed items are kept but flagged done (struck through)."""
     p = request.query_params
     start, end = p.get("start"), p.get("end")
     emp = p.get("employee")
@@ -2117,10 +2380,12 @@ async def calendar(request: Request, user: dict = Depends(get_current_user)):
             {"demo_owner": {"$in": ids}, "demo_date": rng},
             {"followup_assigned_to": {"$in": ids}, "next_follow_up": rng}]}).to_list(None):
         dd, ds = (l.get("demo_date") or "")[:10], l.get("demo_status") or "Scheduled"
-        if dd and l.get("demo_owner") in idset and in_range(dd) and ds != "Cancelled" and l.get("status") not in LOST_STATUSES:
+        # Demos that didn't happen (cancelled / no-show) are left off; only a completed demo shows as done.
+        if (dd and l.get("demo_owner") in idset and in_range(dd) and ds not in ("Cancelled", "No-show", "No Show")
+                and l.get("status") not in LOST_STATUSES):
             ev.append({"kind": "demo", "date": dd, "time": l.get("demo_time"), "title": f"Demo · {l['name']}",
                        "lead_id": l["id"], "lead_name": l["name"], "assignee_id": l.get("demo_owner"),
-                       "assignee": users.get(l.get("demo_owner"), "—"), "status": ds, "done": ds in DEMO_CLOSED})
+                       "assignee": users.get(l.get("demo_owner"), "—"), "status": ds, "done": ds == "Completed"})
         fu = (l.get("next_follow_up") or "")[:10]
         if fu and l.get("followup_assigned_to") in idset and l.get("status") not in TERMINAL and in_range(fu):
             ev.append({"kind": "followup", "date": fu, "time": None, "title": f"Follow-up · {l['name']}",
@@ -2195,7 +2460,7 @@ async def root():
 app.include_router(api)
 app.add_middleware(CORSMiddleware, allow_credentials=True,
                    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-                   allow_methods=["*"], allow_headers=["*"])
+                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Lead-Count"])
 
 # ---------- seed ----------
 @app.on_event("startup")
@@ -2205,6 +2470,7 @@ async def startup():
     await db.leads.create_index("id", unique=True)
     await db.leads.create_index("normalized_phone", unique=True, partialFilterExpression={"normalized_phone": {"$type": "string"}})
     await db.leads.create_index("normalized_email", unique=True, partialFilterExpression={"normalized_email": {"$type": "string"}})
+    await db.leads.create_index("import_key", sparse=True)
     await db.otps.create_index("email")
     await db.custom_fields.create_index("id")
     await db.users.create_index("employee_id", unique=True, partialFilterExpression={"employee_id": {"$type": "string"}})

@@ -274,15 +274,19 @@ def _funnel(h):
     return {f["stage"]: f["count"] for f in requests.get(f"{API}/reports", headers=h, params={"period": "year"}).json()["funnel"]}
 
 
-def test_bug013_funnel_side_branches(mgr):
+def test_bug013_funnel_counts_match_all_leads(mgr):
+    """Each funnel step is the number of leads with exactly that status — what All Leads lists for it."""
     h, _ = mgr
     before = _funnel(h)
-    for st in ("Other", "Demo No-show", "Not Paid"):
+    for st in ("Other", "Demo No-show", "Follow-up", "Demo Completed", "Demo Completed"):
         lead(h, status=st)
     d = {k: v - before[k] for k, v in _funnel(h).items()}
-    assert d["Leads Generated"] == 3
-    assert d["Clients Added"] == 0 and d["Invoice Paid"] == 0 and d["Demo Completed"] == 1  # only Not Paid (after invoice)
-    assert d["Demo Booked"] == 2 and d["Commercials Opened / Invoice Raised"] == 1
+    assert d["Leads Generated"] == 5 and d["Demo Completed"] == 2
+    assert d["Demo Booked"] == 0 and d["People Contacted"] == 0 and d["Clients Added"] == 0
+    rep = requests.get(f"{API}/reports", headers=h, params={"period": "all"}).json()
+    for f in rep["funnel"]:
+        listed = requests.get(f"{API}/leads", headers=h, params={"status": f["status"]} if f["status"] else {}).json()
+        assert f["count"] == len(listed), f["stage"]
 
 
 def test_bug024_overdue_metric_matches_list(mgr):
@@ -354,6 +358,42 @@ def test_bug005_037_import_reads_cells_as_text(mgr):
     assert rows[0]["Phone"] == "9988776655" and rows[1]["Phone"] == ""
     r = requests.post(f"{API}/import/parse", headers=h, files={"file": ("w.csv", "Name,City\nDr. José,Bogotá\n".encode("cp1252"))})
     assert r.status_code == 200 and r.json()["rows"][0]["Name"] == "Dr. José"
+
+
+def test_import_keeps_sheet_owner_and_skips_duplicates(admin, mgr, emp):
+    """Owner comes from the sheet (never silently the importer); re-importing creates no duplicates."""
+    h, me = mgr
+    _, owner = emp
+    p1 = phone()
+    cols = {"name": "Lead", "phone": "Contact", "status": "Status", "owner": "Owner", "last_interaction_at": "Last Interaction",
+            "next_follow_up": "Next Follow-up", "demo_status": "Demo", "notes": "Notes"}
+    def row(n, **kw):
+        return {"Lead": f"QA Own {n} {RUN}", "Contact": "", "Status": "Demo Booked", "Owner": "", "Last Interaction": "",
+                "Next Follow-up": "", "Demo": "", "Notes": "", **kw}
+    rows = [row("A", Contact=p1, Owner=owner["name"], Demo="Booked", Notes="Test import",
+                **{"Last Interaction": "24 Sep", "Next Follow-up": "03 Oct"}),
+            row("B", Owner="Unassigned"),
+            row("C", Owner=f"Nobody {RUN}"),
+            row("D", Contact=p1, Owner=owner["name"]),                       # same phone as A but a different row: kept
+            row("E", Owner=owner["email"], Notes="first"), row("E", Owner=owner["email"], Notes="second"),
+            row("E", Owner=owner["email"], Notes="first")]                   # identical contact-less row
+    res = requests.post(f"{API}/import/commit", headers=h, json={"mapping": cols, "rows": rows}).json()
+    assert (res["imported"], res["duplicates"], res["invalid"]) == (5, 1, 1), res
+    assert [d["reason"] for d in res["details"] if d["status"] == "invalid"] == [f"unknown owner 'Nobody {RUN}'"]
+    got = {l["name"].split()[2] + l["notes"]: l for l in requests.get(f"{API}/leads", headers=h, params={"search": f"QA Own"}).json() if RUN in l["name"]}
+    a = got["ATest import"]
+    assert a["owner"] == owner["id"] and a["added_by"] == me["id"] and a["followup_assigned_to"] == owner["id"]
+    assert (a["phone"], a["status"], a["demo_status"]) == (p1, "Demo Booked", "Scheduled")
+    year = datetime.now(ZoneInfo("Asia/Kolkata")).year
+    assert a["next_follow_up"] == f"{year}-10-03" and a["last_interaction_at"].startswith(f"{year}-09-23T18:30")
+    assert got["B"]["owner"] is None                       # "Unassigned" is not handed to the importer
+    assert {"Efirst", "Esecond", "D"} <= set(got) and got["D"]["phone"] == p1   # only an identical row is a duplicate
+    again = requests.post(f"{API}/import/commit", headers=h, json={"mapping": cols, "rows": rows}).json()
+    assert again["imported"] == 0 and again["duplicates"] == 6
+    # No Owner column in the file: the importer owns the lead, as with manual creation.
+    res = requests.post(f"{API}/import/commit", headers=h, json={"mapping": {"name": "Lead"}, "rows": [{"Lead": f"QA Own F {RUN}"}]}).json()
+    assert res["imported"] == 1
+    assert requests.get(f"{API}/leads", headers=h, params={"search": f"QA Own F {RUN}"}).json()[0]["owner"] == me["id"]
 
 
 def test_bug027_option_rename_cascades_and_protects(admin):

@@ -229,8 +229,8 @@ def test_cal02_demo_outcomes(mgr, emp):
     noshow = new_lead(h)
     requests.post(f"{API}/leads/{noshow['id']}/demo/schedule", headers=h, json={"demo_date": day(-2), "presenter_id": e["id"]})
     requests.post(f"{API}/leads/{noshow['id']}/demo/complete", headers=h, json={"demo_status": "No-show"})
-    ev = items(eh, noshow["id"])
-    assert len(ev) == 1 and ev[0]["done"] is True and ev[0]["status"] == "No-show"
+    # A demo that didn't happen is left off the calendar (only a completed demo shows as done).
+    assert items(eh, noshow["id"]) == [] and open_tasks(h, noshow["id"], "demo") == []
     cancel = new_lead(h)
     requests.post(f"{API}/leads/{cancel['id']}/demo/schedule", headers=h, json={"demo_date": day(3), "presenter_id": e["id"]})
     requests.post(f"{API}/leads/{cancel['id']}/demo/complete", headers=h, json={"demo_status": "Cancelled"})

@@ -4,13 +4,13 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useAutoRefresh } from "@/lib/useAutoRefresh";
 import { Card } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineChart, Line, CartesianGrid } from "recharts";
 
 const COLORS = ["#E11D6B", "#0D9488", "#F59E0B", "#8B5CF6", "#0EA5E9", "#E11D48", "#10B981", "#6366F1"];
-const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"], ["custom", "Custom"]];
+const PERIODS = [["all", "All time"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"], ["custom", "Custom"]];
 const FUNNEL_COLORS = ["#6366F1", "#4F46E5", "#7C3AED", "#8B5CF6", "#A855F7", "#C026D3", "#D946EF", "#EC4899", "#F43F5E", "#10B981"];
-// funnel stage -> lead status used for drill-down
-const FUNNEL_STATUS = { "New Lead": "New Lead", Contacted: "Contacted", Interested: "Interested", Demo: "Demo Booked", Trial: "Trial", Pricing: "Pricing Shared", Invoice: "Invoice Raised", Payment: "Paid", Converted: "Converted" };
+// Statuses counted as losses by the backend (LOST_STATUSES in server.py) — the drill-down must list all of them.
+const LOST_STATUSES = "Lost,Not Interested,Closed";
 
 export default function Reports() {
   const { isManager } = useAuth();
@@ -20,7 +20,7 @@ export default function Reports() {
   const [members, setMembers] = useState([]);
   const [team, setTeam] = useState("all");
   const [employee, setEmployee] = useState("all");
-  const [period, setPeriod] = useState("month");
+  const [period, setPeriod] = useState("all");   // all time by default, so the numbers match the Leads / Demos lists
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
 
@@ -42,7 +42,17 @@ export default function Reports() {
   useAutoRefresh(load, 12000);
 
   const leadBase = isManager ? "/all-leads" : "/my-leads";
-  const goStatus = (status) => () => navigate(status ? `${leadBase}?status=${encodeURIComponent(status)}` : leadBase);
+  // Drill-downs open the lead list with the report's own period / team / owner, so the list is exactly the
+  // leads behind the number that was clicked.
+  const goLeads = (extra) => () => {
+    const p = new URLSearchParams(extra);
+    if (period !== "all") { p.set("period", period); if (period === "custom") { p.set("start", start); p.set("end", end); } }
+    if (isManager && employee !== "all") p.set("owner", employee);
+    else if (isManager && team !== "all") p.set("owner_team", team);
+    const qs = p.toString();
+    navigate(qs ? `${leadBase}?${qs}` : leadBase);
+  };
+  const goStatus = (status) => goLeads(status ? { status } : {});
 
   const Stat = ({ label, value, tone, onClick, testid }) => (
     <Card data-testid={testid} onClick={onClick} className={`p-4 ${onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-transform" : ""}`}>
@@ -79,17 +89,19 @@ export default function Reports() {
 
       {!data ? <p className="text-slate-400">Loading…</p> : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="sales-stats">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3" data-testid="sales-stats">
             <Stat testid="stat-sales-leads" label="Leads" value={data.sales.leads} tone="text-slate-900" onClick={goStatus("")} />
-            <Stat testid="stat-sales-outreach" label="Outreach" value={data.sales.outreach} tone="text-emerald-600" />
-            <Stat testid="stat-sales-responses" label="Responses" value={data.sales.responses} tone="text-blue-600" />
-            <Stat testid="stat-sales-demos" label="Demos" value={data.sales.demos} tone="text-purple-600" onClick={goStatus("Demo Booked")} />
+            <Stat testid="stat-sales-outreach" label="Outreach logged"value={data.sales.outreach} tone="text-emerald-600" />
+            <Stat testid="stat-sales-responses" label="Responses" value={data.sales.responses} tone="text-blue-600" onClick={goStatus("Replied")} />
+            <Stat testid="stat-sales-demos" label="Demos" value={data.sales.demos} tone="text-purple-600" onClick={() => navigate("/demos")} />
+            <Stat testid="stat-sales-demos-completed" label="Demos completed" value={data.sales.demos_completed} tone="text-purple-700" onClick={() => navigate("/demos")} />
             <Stat testid="stat-sales-trials" label="Trials" value={data.sales.trials} tone="text-teal-600" onClick={goStatus("Trial")} />
-            <Stat testid="stat-sales-followups" label="Follow-ups" value={data.sales.follow_ups} tone="text-amber-600" />
+            <Stat testid="stat-sales-followups-open" label="Follow-ups pending" value={data.sales.follow_ups_open} tone="text-amber-600" onClick={goLeads({ follow_up: "pending" })} />
+            <Stat testid="stat-sales-followups" label="Follow-ups logged" value={data.sales.follow_ups} tone="text-amber-700" />
             <Stat testid="stat-sales-invoices" label="Invoices" value={data.sales.invoices} tone="text-indigo-600" onClick={goStatus("Invoice Raised")} />
             <Stat testid="stat-sales-payments" label="Payments" value={data.sales.payments} tone="text-emerald-700" onClick={goStatus("Paid")} />
             <Stat testid="stat-sales-conversions" label="Conversions" value={data.sales.conversions} tone="text-emerald-600" onClick={goStatus("Converted")} />
-            <Stat testid="stat-sales-losses" label="Losses" value={data.sales.losses} tone="text-rose-600" onClick={goStatus("Lost")} />
+            <Stat testid="stat-sales-losses" label="Losses" value={data.sales.losses} tone="text-rose-600" onClick={goStatus(LOST_STATUSES)} />
           </div>
 
           <Card className="p-5" data-testid="sales-funnel">
@@ -102,7 +114,7 @@ export default function Reports() {
             </div>
             <div className="space-y-2">
               {data.funnel.map((f, i) => (
-                <button key={f.stage} data-testid={`funnel-step-${i}`} onClick={goStatus(f.status)} disabled={!f.status} className="w-full group">
+                <button key={f.stage} data-testid={`funnel-step-${i}`} onClick={goStatus(f.status)} className="w-full group">
                   <div className="flex items-center gap-3">
                     <span className="w-52 text-right text-xs font-medium text-slate-600 shrink-0">{f.stage}</span>
                     <div className="flex-1 h-8 bg-slate-100 rounded-md overflow-hidden">
@@ -113,7 +125,7 @@ export default function Reports() {
                 </button>
               ))}
             </div>
-            <p className="text-xs text-slate-500 mt-3">Overall conversion: <b className="text-emerald-600">{data.funnel[0].count ? Math.round(data.sales.conversions / data.funnel[0].count * 100) : 0}%</b> · Lost/Closed in period: <button onClick={goStatus("Lost")} className="text-rose-600 font-semibold hover:underline">{data.lost}</button></p>
+            <p className="text-xs text-slate-500 mt-3">Overall conversion: <b className="text-emerald-600">{data.funnel[0].count ? Math.round(data.sales.conversions / data.funnel[0].count * 100) : 0}%</b> · Lost/Closed in period: <button onClick={goStatus(LOST_STATUSES)} className="text-rose-600 font-semibold hover:underline">{data.lost}</button></p>
           </Card>
 
           <div className="grid lg:grid-cols-2 gap-6">
@@ -129,17 +141,22 @@ export default function Reports() {
               </ResponsiveContainer>
             </Card>
             <Card className="p-5" data-testid="chart-by-source">
-              <h3 className="font-bold text-slate-900 mb-4">Lead Sources</h3>
-              <ResponsiveContainer width="100%" height={280}>
-                <PieChart>
-                  <Pie data={data.by_source} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={90} label={(e) => e.source}>
-                    {data.by_source.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie><Tooltip />
-                </PieChart>
+              <h3 className="font-bold text-slate-900 mb-1">Lead Sources</h3>
+              <p className="text-xs text-slate-500 mb-3">Leads per team member (owner), as in All Leads. Click a bar to open that person's leads.</p>
+              <ResponsiveContainer width="100%" height={Math.max(240, data.by_owner.length * 32)}>
+                <BarChart data={data.by_owner} layout="vertical" margin={{ right: 28 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={120} interval={0} /><Tooltip />
+                  <Bar dataKey="count" name="Leads" radius={[0, 4, 4, 0]} label={{ position: "right", fontSize: 11, fill: "#475569" }}
+                    cursor={isManager ? "pointer" : undefined} onClick={(d) => { if (isManager && d?.owner_id) goLeads({ owner: d.owner_id })(); }}>
+                    {data.by_owner.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </Card>
             <Card className="p-5" data-testid="chart-by-channel">
-              <h3 className="font-bold text-slate-900 mb-4">Outreach by Channel</h3>
+              <h3 className="font-bold text-slate-900 mb-4">Activities by Type</h3>
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={data.by_channel}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -150,7 +167,7 @@ export default function Reports() {
             </Card>
             {data.by_employee.length > 0 && (
               <Card className="p-5" data-testid="chart-by-employee">
-                <h3 className="font-bold text-slate-900 mb-4">Outreach by Employee</h3>
+                <h3 className="font-bold text-slate-900 mb-4">Activities by Employee</h3>
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={data.by_employee} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />

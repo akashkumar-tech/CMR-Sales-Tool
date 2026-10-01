@@ -62,7 +62,7 @@ export default function Login() {
             <div className="pt-2">
               <p className="text-xs text-slate-400 mb-2">Only approved staff can sign in. Initial admin:</p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" data-testid="quick-email-admin" onClick={() => setEmail("admin@beet.health")} className="px-2.5 py-1 rounded-full text-xs font-medium border border-border text-slate-600 hover:bg-slate-50">admin@beet.health</button>
+                <button type="button" data-testid="quick-email-admin" onClick={() => setEmail("shivanshi@beet.health")} className="px-2.5 py-1 rounded-full text-xs font-medium border border-border text-slate-600 hover:bg-slate-50">shivanshi@beet.health</button>
                 <button type="button" data-testid="quick-email-manager" onClick={() => setEmail("paripsa.tripathi@beet.health")} className="px-2.5 py-1 rounded-full text-xs font-medium border border-border text-slate-600 hover:bg-slate-50">paripsa.tripathi@beet.health</button>
               </div>
             </div>
