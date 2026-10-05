@@ -26,6 +26,7 @@ export default function Login() {
     setBusy(true);
     try {
       const res = await requestOtp(email.trim());
+      if (res.token) { toast.success("Signed in (dev mode — OTP skipped)"); navigate("/dashboard"); return; }
       setStep("otp");
       if (res.dev_otp) { setDevOtp(res.dev_otp); toast.info(`Dev OTP: ${res.dev_otp}`); }
       else toast.success("Code sent to your email");

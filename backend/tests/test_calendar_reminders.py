@@ -62,7 +62,8 @@ def items(h, lead_id=None, title=None, **extra):
 
 
 def new_lead(h, **kw):
-    r = requests.post(f"{API}/leads", headers=h, json={"name": f"Cal {RUN} {uuid.uuid4().hex[:5]}", **kw})
+    t = uuid.uuid4().hex[:10]
+    r = requests.post(f"{API}/leads", headers=h, json={"name": f"Cal {RUN} {t[:5]}", "email": f"cal_{t}@example.com", "linkedin": f"linkedin.com/in/cal-{t}", "instagram": f"@cal_{t}", **kw})
     assert r.status_code == 200, r.text
     return r.json()
 

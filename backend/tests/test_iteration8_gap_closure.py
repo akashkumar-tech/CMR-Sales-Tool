@@ -67,6 +67,7 @@ def _new_lead(mgr, name_suffix=""):
     tag = uuid.uuid4().hex[:8]
     payload = {"name": f"TEST_Lead_{tag}{name_suffix}",
                "phone": f"+1{tag[:9]}", "email": f"t_{tag}@example.com",
+               "linkedin": f"linkedin.com/in/t-{tag}", "instagram": f"@t_{tag}",
                "owner": mgr["u"]["id"], "team": "Sales", "status": "New"}
     r = requests.post(f"{API}/leads", json=payload, headers=mgr["h"], timeout=30)
     assert r.status_code == 200, r.text

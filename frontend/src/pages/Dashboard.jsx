@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { stageStyle, fmtDate, fmtDateTime } from "@/lib/crm";
 import { useAutoRefresh } from "@/lib/useAutoRefresh";
 import { Card } from "@/components/ui/card";
+import SalesFunnel, { LOST_STATUSES } from "@/components/SalesFunnel";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +16,10 @@ import {
 // Activity types behind the "Calls Made" / "Messages Sent" counts (see compute_metrics in the backend).
 const CALL_TYPES = "Call";
 const MESSAGE_TYPES = "WhatsApp,Instagram,LinkedIn,Email";
+// Sales Funnel periods — same values Reports sends to /reports (period_bounds in server.py: Asia/Kolkata calendar
+// periods to date, Week from Monday; "all" = no date filter).
+const FUNNEL_PERIODS = [["all", "All Time"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["year", "Year"]];
+const SELECT = "h-9 rounded-lg border border-border text-sm px-3 text-slate-600";   // same as the Reports filters
 
 const Stat = ({ icon: Icon, label, value, tone = "text-primary bg-primary/10", testid, onClick }) => (
   <Card data-testid={testid} onClick={onClick} className={`p-4 flex items-center gap-3 transition-transform ${onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md" : ""}`}>
@@ -34,13 +39,34 @@ function ManagerDashboard({ user }) {
   const [perf, setPerf] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [report, setReport] = useState(null);
+  // Sales Funnel filters: the same parameters Reports sends, so identical choices give identical numbers.
+  const [period, setPeriod] = useState("all");
+  const [team, setTeam] = useState("all");
+  const [owner, setOwner] = useState("all");
+  const [teams, setTeams] = useState([]);
+  const [members, setMembers] = useState([]);
+  const reportReq = useRef(0);
 
+  const loadReport = () => {
+    const p = new URLSearchParams({ period });
+    if (team !== "all") p.set("team", team);
+    if (owner !== "all") p.set("employee", owner);
+    const req = ++reportReq.current;   // ignore a slower response for filters that have since changed
+    api.get(`/reports?${p.toString()}`).then((r) => { if (req === reportReq.current) setReport(r.data); }).catch(() => {});
+  };
   const load = () => {
     api.get("/performance/team?period=month").then((r) => setPerf(aggregate(r.data.rows))).catch(() => {});
+    loadReport();
     api.get("/tasks?view=today").then((r) => setTasks(r.data)).catch(() => {});
     api.get("/leads?scope=mine").then((r) => setLeads(r.data.slice(0, 6))).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {   // same team / owner options as Reports
+    api.get("/teams").then((r) => setTeams(r.data)).catch(() => {});
+    api.get("/users").then((r) => setMembers(r.data.filter((u) => u.role !== "admin"))).catch(() => {});
+  }, []);
+  useEffect(() => { loadReport(); }, [period, team, owner]);
   useAutoRefresh(load, 10000);
 
   function aggregate(rows) {
@@ -49,6 +75,15 @@ function ManagerDashboard({ user }) {
       conversions: sum("conversions"), demos_booked: sum("demos_booked"), lost: sum("lost"), overdue_follow_ups: sum("overdue_follow_ups") };
   }
   const go = (qs) => () => navigate(`/all-leads?${qs}`);
+  // Funnel drill-downs open the same lead lists as Reports' do, with the funnel's period / team / owner.
+  const goFunnel = (extra) => () => {
+    const p = new URLSearchParams(extra);
+    if (period !== "all") p.set("period", period);
+    if (owner !== "all") p.set("owner", owner);
+    else if (team !== "all") p.set("owner_team", team);
+    navigate(`/all-leads?${p.toString()}`);
+  };
+  const goStep = (f) => goFunnel(f.paid ? { paid: "1" } : f.status ? { status: f.status } : {});   // paid steps: Paid = Converted
   // Same filters the backend uses for these counts: this month's team activities of these types.
   const goActs = (types) => () => navigate(`/activities?type=${encodeURIComponent(types)}&period=month&staff=1`);
 
@@ -57,14 +92,14 @@ function ManagerDashboard({ user }) {
       <div>
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">Manager Command Centre</p>
         <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Welcome back, {user?.name}</h1>
-        <p className="text-sm text-slate-500 mt-1">Your team's activity this month. Tap any metric to open the leads behind it.</p>
+        <p className="text-sm text-slate-500 mt-1"></p>
       </div>
       {perf && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <Stat testid="stat-leads" icon={Users} label="Team Leads Added" value={perf.leads_added} onClick={go("")} />
           <Stat testid="stat-interested" icon={Star} label="Interested" value={perf.interested} tone="text-amber-600 bg-amber-50" onClick={go("status=Interested")} />
           <Stat testid="stat-demos" icon={Calendar} label="Demos Booked" value={perf.demos_booked} tone="text-purple-600 bg-purple-50" onClick={go("status=Demo Booked")} />
-          <Stat testid="stat-conversions" icon={TrendingUp} label="Conversions" value={perf.conversions} tone="text-teal-600 bg-teal-50" onClick={go("status=Converted")} />
+          <Stat testid="stat-conversions" icon={TrendingUp} label="Conversions" value={perf.conversions} tone="text-teal-600 bg-teal-50" onClick={go("paid=1")} />
           <Stat testid="stat-calls" icon={Phone} label="Calls Made" value={perf.calls} tone="text-emerald-600 bg-emerald-50" onClick={goActs(CALL_TYPES)} />
           <Stat testid="stat-messages" icon={MessageSquare} label="Messages Sent" value={perf.messages} tone="text-blue-600 bg-blue-50" onClick={goActs(MESSAGE_TYPES)} />
           <Stat testid="stat-lost" icon={AlertCircle} label="Lost / Not Interested" value={perf.lost} tone="text-rose-600 bg-rose-50" onClick={go("status=Lost,Not Interested")} />
@@ -75,6 +110,22 @@ function ManagerDashboard({ user }) {
         <TaskList title="Today's Tasks & Follow-ups" tasks={tasks} />
         <RecentLeads leads={leads} />
       </div>
+      {report && (
+        <SalesFunnel data={report} onStep={goStep} onLost={goFunnel({ status: LOST_STATUSES })}
+          subtitle="Same numbers as Reports for the same filters · leads counted by date created (India time)"
+          labelClass="w-28 sm:w-52" testid="dashboard-sales-funnel"
+          filters={<>
+            <select data-testid="dashboard-funnel-period" aria-label="Period" value={period} onChange={(e) => setPeriod(e.target.value)} className={SELECT}>
+              {FUNNEL_PERIODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <select data-testid="dashboard-funnel-team" aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)} className={SELECT}>
+              <option value="all">All Teams</option>{teams.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select data-testid="dashboard-funnel-owner" aria-label="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} className={SELECT}>
+              <option value="all">All Owners</option>{members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </>} />
+      )}
     </div>
   );
 }
@@ -125,7 +176,7 @@ function EmployeeDashboard({ user }) {
           <Stat testid="kpi-demos-booked" icon={Calendar} label="Demos Booked" value={perf.demos_booked} tone="text-purple-600 bg-purple-50" onClick={go("status=Demo Booked")} />
           <Stat testid="kpi-demos-done" icon={CheckCircle2} label="Demos Completed" value={perf.demos_completed} tone="text-purple-600 bg-purple-50" onClick={go("status=Demo Completed")} />
           <Stat testid="kpi-followups" icon={CheckSquare} label="Follow-ups Done" value={perf.follow_ups} tone="text-teal-600 bg-teal-50" />
-          <Stat testid="kpi-conversions" icon={TrendingUp} label="Conversions" value={perf.conversions} tone="text-teal-600 bg-teal-50" onClick={go("status=Converted")} />
+          <Stat testid="kpi-conversions" icon={TrendingUp} label="Conversions" value={perf.conversions} tone="text-teal-600 bg-teal-50" onClick={go("paid=1")} />
           <Stat testid="kpi-tasks-done" icon={CheckCircle2} label="Tasks Completed" value={perf.tasks_completed} tone="text-emerald-600 bg-emerald-50" />
           <Stat testid="kpi-overdue" icon={AlertCircle} label="Overdue Follow-ups" value={perf.overdue_follow_ups} tone="text-rose-600 bg-rose-50" onClick={go("follow_up=overdue")} />
         </div>

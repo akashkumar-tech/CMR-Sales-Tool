@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import CustomFieldInput from "@/components/CustomFieldInput";
 import { AlertTriangle } from "lucide-react";
 
+// Required for every new lead — the backend (LeadIn) rejects a lead without them too.
+const REQUIRED = [["name", "Lead Name"], ["linkedin", "LinkedIn"], ["email", "Email"], ["instagram", "Instagram"]];
 const empty = { name: "", phone: "", email: "", instagram: "", linkedin: "", practice: "", location: "", source: "", status: "New Lead", next_follow_up: "", notes: "", owner: "", custom: {} };
 
 export default function AddLeadDialog({ open, onOpenChange, onCreated, members = [] }) {
@@ -21,10 +23,12 @@ export default function AddLeadDialog({ open, onOpenChange, onCreated, members =
   const [form, setForm] = useState(empty);
   const [dupes, setDupes] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [blankFields, setBlankFields] = useState([]);
   const assignable = members.filter((m) => m.active !== false && m.role !== "admin");
 
-  useEffect(() => { if (open) { setForm(empty); setDupes([]); } }, [open]);
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => { if (open) { setForm(empty); setDupes([]); setBlankFields([]); } }, [open]);
+  const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setBlankFields((m) => m.filter((x) => x !== k)); };
+  const invalid = (k) => (blankFields.includes(k) ? "border-rose-500 focus-visible:ring-rose-500" : "");
   const setCustom = (k, v) => setForm((f) => ({ ...f, custom: { ...f.custom, [k]: v } }));
 
   const checkDup = async () => {
@@ -36,7 +40,9 @@ export default function AddLeadDialog({ open, onOpenChange, onCreated, members =
   };
 
   const submit = async () => {
-    if (!form.name.trim()) return toast.error("Lead name is required");
+    const empties = REQUIRED.filter(([k]) => !form[k].trim());
+    setBlankFields(empties.map(([k]) => k));
+    if (empties.length) return toast.error(`Please fill in required field(s): ${empties.map(([, l]) => l).join(", ")}`);
     const blank = (v) => v === undefined || v === null || (typeof v === "string" && !v.trim()) || (Array.isArray(v) && !v.length);
     const missing = customFields.filter((f) => f.required && blank(form.custom?.[f.key])).map((f) => f.label);
     if (missing.length) return toast.error(`Please fill in required field(s): ${missing.join(", ")}`);
@@ -72,12 +78,12 @@ export default function AddLeadDialog({ open, onOpenChange, onCreated, members =
           </div>
         )}
         <div className="grid grid-cols-2 gap-4">
-          <div><Label>Lead Name *</Label><Input data-testid="lead-name-input" value={form.name} onChange={(e) => set("name", e.target.value)} /></div>
+          <div><Label>Lead Name *</Label><Input data-testid="lead-name-input" required aria-invalid={blankFields.includes("name")} className={invalid("name")} value={form.name} onChange={(e) => set("name", e.target.value)} /></div>
           <div><Label>Practice / Clinic</Label><Input data-testid="lead-practice-input" value={form.practice} onChange={(e) => set("practice", e.target.value)} /></div>
           <div><Label>Phone / WhatsApp</Label><Input data-testid="lead-phone-input" value={form.phone} onChange={(e) => set("phone", e.target.value)} onBlur={checkDup} /></div>
-          <div><Label>Email</Label><Input data-testid="lead-email-input" value={form.email} onChange={(e) => set("email", e.target.value)} onBlur={checkDup} /></div>
-          <div><Label>Instagram</Label><Input data-testid="lead-instagram-input" value={form.instagram} onChange={(e) => set("instagram", e.target.value)} onBlur={checkDup} /></div>
-          <div><Label>LinkedIn</Label><Input data-testid="lead-linkedin-input" value={form.linkedin} onChange={(e) => set("linkedin", e.target.value)} onBlur={checkDup} /></div>
+          <div><Label>Email *</Label><Input data-testid="lead-email-input" required aria-invalid={blankFields.includes("email")} className={invalid("email")} value={form.email} onChange={(e) => set("email", e.target.value)} onBlur={checkDup} /></div>
+          <div><Label>Instagram *</Label><Input data-testid="lead-instagram-input" required aria-invalid={blankFields.includes("instagram")} className={invalid("instagram")} value={form.instagram} onChange={(e) => set("instagram", e.target.value)} onBlur={checkDup} /></div>
+          <div><Label>LinkedIn *</Label><Input data-testid="lead-linkedin-input" required aria-invalid={blankFields.includes("linkedin")} className={invalid("linkedin")} value={form.linkedin} onChange={(e) => set("linkedin", e.target.value)} onBlur={checkDup} /></div>
           <div><Label>Location</Label><Input data-testid="lead-location-input" value={form.location} onChange={(e) => set("location", e.target.value)} /></div>
           <div><Label>Source</Label>
             <Select value={form.source} onValueChange={(v) => set("source", v)}>

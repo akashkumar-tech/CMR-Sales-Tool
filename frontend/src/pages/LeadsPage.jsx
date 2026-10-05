@@ -15,8 +15,9 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { Button } from "@/components/ui/button";
 import { Search, MoreVertical, Pencil, Trash2 } from "lucide-react";
 
-// URL params set by a Reports drill-down and passed straight to GET /leads.
-const REPORT_PARAMS = ["period", "start", "end", "owner_team"];
+// URL params set by a Reports / Dashboard drill-down and passed straight to GET /leads.
+// paid=1: paid leads, which are the converted leads (Paid = Converted).
+const REPORT_PARAMS = ["period", "start", "end", "owner_team", "paid"];
 
 export default function LeadsPage({ scope }) {
   const { isManager } = useAuth();
@@ -77,6 +78,7 @@ export default function LeadsPage({ scope }) {
   }, [scope, search, status, owner, source, team, followUp, showArchived, params]);
   // Filter carried over from a Reports drill-down (funnel step / period / team).
   const reportFilter = [
+    params.get("paid") && "paid (converted)",
     params.get("period") && (params.get("period") === "custom" ? `created ${params.get("start")} – ${params.get("end")}` : `created this ${params.get("period")}`),
     params.get("owner_team") && `team ${params.get("owner_team")}`,
   ].filter(Boolean).join(" · ");

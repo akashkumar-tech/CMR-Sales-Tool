@@ -1,6 +1,7 @@
 """Phase 1 workflow tests: handover, timeline, notifications, expected_version, reasons, task lifecycle."""
 import os
 import time
+import uuid
 import pytest
 import requests
 
@@ -60,7 +61,9 @@ def intern(): return _login(INTERN)
 
 
 def _make_lead(mgr, owner_id, name="TEST_PhaseLead", phone=None):
-    payload = {"name": name, "phone": phone or f"+199955510{int(time.time()) % 1000:03d}", "owner": owner_id}
+    t = uuid.uuid4().hex[:10]
+    payload = {"name": name, "phone": phone or f"+199955510{int(time.time()) % 1000:03d}", "owner": owner_id,
+               "email": f"p1_{t}@example.com", "linkedin": f"linkedin.com/in/p1-{t}", "instagram": f"@p1_{t}"}
     r = requests.post(f"{API}/leads", json=payload, headers=_h(mgr["token"]))
     assert r.status_code == 200, r.text
     return r.json()

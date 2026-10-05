@@ -26,6 +26,8 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 OTP_DEV_MODE = os.environ.get("OTP_DEV_MODE", "false").lower() == "true"
+# DEV_MODE skips email OTP verification entirely (approved, active users only). Missing / anything but "true" = off.
+DEV_MODE = os.environ.get("DEV_MODE", "false").strip().lower() == "true"
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Beet.Health CRM")
@@ -43,6 +45,8 @@ app = FastAPI()
 api = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("beet")
+if DEV_MODE:
+    logger.warning("DEV_MODE is ON: email OTP verification is disabled. Never enable it in production.")
 
 MANAGER_ROLES = ("admin", "manager")
 ALL_ROLES = ("admin", "manager", "employee", "intern")
@@ -88,6 +92,15 @@ HAS_DATE = {"$nin": [None, ""]}
 TERMINAL = ["Converted", "Lost", "Closed", "Not Interested"]
 # Demo statuses that mean the demo is no longer upcoming ("No Show" = legacy spelling written by older UI).
 DEMO_CLOSED = ["Completed", "Cancelled", "No-show", "No Show"]
+
+# Business rule: PAID = CONVERTED. There is no separate conversion state — a lead counts as converted (and as a
+# payment) exactly when it is paid: payment status "Paid", or the "Paid" stage. The legacy "Converted" stage comes
+# after payment, so it is paid too. Every count, filter and report uses these two definitions.
+PAID_STAGES = ("Paid", "Converted")
+PAID_Q = {"$or": [{"payment_status": "Paid"}, {"status": {"$in": list(PAID_STAGES)}}]}
+
+def lead_is_paid(l):
+    return l.get("payment_status") == "Paid" or l.get("status") in PAID_STAGES
 
 def norm_email(e):
     return (e or "").strip().lower()
@@ -186,15 +199,14 @@ def status_updates(new_status, lead, opt, reason=None, notes=None):
     """Fields that must change together with a lead's status, on every path that changes it.
     Callers must have validated the reason already when opt requires one."""
     upd = {}
-    if new_status == "Converted":
-        upd["conversion_status"] = "Converted"
-    elif opt and opt.get("requires_reason"):
+    if opt and opt.get("requires_reason"):
         upd.update({"conversion_status": "Lost", "lost_reason": reason, "lost_notes": notes or ""})
-    else:  # reopened / progressing lead: clear the previous loss
-        upd.update({"conversion_status": "Open", "lost_reason": None, "lost_notes": ""})
+    else:  # reopened / progressing lead: clear the previous loss. Paid = Converted.
+        upd.update({"conversion_status": "Converted" if lead_is_paid({**lead, "status": new_status}) else "Open",
+                    "lost_reason": None, "lost_notes": ""})
     if new_status == "Demo Completed" and lead.get("status") != "Demo Completed":
         upd["demo_completed_at"] = now_iso()
-    if new_status == "Paid":
+    if new_status in PAID_STAGES:
         if lead.get("payment_status") != "Paid":
             upd["payment_status"] = "Paid"
         if not lead.get("payment_date"):
@@ -680,12 +692,21 @@ def _check_name(v):
         raise ValueError("Lead name is required")
     return v
 
+# Contact fields a NEW lead must have (Add Lead). Editing and tracker imports keep their own rules.
+NEW_LEAD_REQUIRED = {"email": "Email", "linkedin": "LinkedIn", "instagram": "Instagram"}
+
+def _check_required_contact(v, info):
+    v = (v or "").strip()
+    if not v:
+        raise ValueError(f"{NEW_LEAD_REQUIRED[info.field_name]} is required")
+    return v
+
 class LeadIn(BaseModel):
     name: str = Field(max_length=NAME_MAX)
     phone: Optional[str] = Field("", max_length=SHORT_MAX)
-    email: Optional[str] = Field("", max_length=SHORT_MAX)
-    instagram: Optional[str] = Field("", max_length=SHORT_MAX)
-    linkedin: Optional[str] = Field("", max_length=SHORT_MAX)
+    email: Optional[str] = Field("", max_length=SHORT_MAX, validate_default=True)
+    instagram: Optional[str] = Field("", max_length=SHORT_MAX, validate_default=True)
+    linkedin: Optional[str] = Field("", max_length=SHORT_MAX, validate_default=True)
     practice: Optional[str] = Field("", max_length=SHORT_MAX)
     location: Optional[str] = Field("", max_length=SHORT_MAX)
     source: Optional[str] = Field("", max_length=SHORT_MAX)
@@ -699,6 +720,7 @@ class LeadIn(BaseModel):
     force: bool = False
 
     check_name = field_validator("name")(_check_name)
+    check_contact = field_validator(*NEW_LEAD_REQUIRED)(_check_required_contact)
     check_dates = field_validator("next_follow_up")(_check_date)
 
 class LeadUpdate(BaseModel):
@@ -790,6 +812,10 @@ async def request_otp(body: EmailIn):
     user = await db.users.find_one({"email": email})
     if not user or not user.get("active", True):
         raise HTTPException(403, "This email is not approved for CRM access. Contact your admin.")
+    if DEV_MODE:   # no code is created, emailed or checked — the session is issued here
+        await db.users.update_one({"id": user["id"]}, {"$set": {"last_login": now_iso()}})
+        logger.info(f"DEV_MODE login for {email} (OTP skipped)")
+        return {"dev_mode": True, "token": create_token(user["id"], user["email"]), "user": clean(user)}
     # rate limit: max 5 in 10 min
     since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     recent = await db.otps.count_documents({"email": email, "created_at": {"$gte": since}})
@@ -1066,6 +1092,14 @@ async def list_leads(request: Request, user: dict = Depends(get_current_user)):
         elif fu == "pending":   # every follow-up still to do, whatever its date — Reports' "Follow-ups pending"
             q["next_follow_up"] = HAS_DATE
             q["status"] = {"$nin": TERMINAL}
+    # Paid = Converted: the leads Reports / Dashboard count as payments and conversions.
+    if p.get("paid") in ("1", "true"):
+        q["$and"] = q.get("$and", []) + [PAID_Q]
+    # Demo Pipeline: every lead with a booked demo, optionally narrowed to one demo state.
+    if p.get("demo"):
+        if p.get("demo") not in DEMO_FILTERS:
+            raise HTTPException(400, f"Unknown demo filter \"{p.get('demo')}\"")
+        q["$and"] = q.get("$and", []) + [HAS_DEMO_Q, DEMO_FILTERS[p.get("demo")]]
     if not p.get("include_archived") and p.get("archived") != "true":
         q["archived"] = {"$ne": True}
     elif p.get("archived") == "true":
@@ -1258,6 +1292,11 @@ async def update_lead(lid: str, body: LeadUpdate, user: dict = Depends(get_curre
     updates["updated_by"] = user["id"]; updates["updated_by_name"] = user["name"]
     if updates.get("payment_status") == "Paid" and not (updates.get("payment_date") or lead.get("payment_date")):
         updates["payment_date"] = now_iso()
+    # Paid = Converted: the conversion follows the payment whichever field changed (a lost lead stays lost).
+    if "status" in updates or "payment_status" in updates:
+        merged = {**lead, **updates}
+        if merged.get("conversion_status") != "Lost":
+            updates["conversion_status"] = "Converted" if lead_is_paid(merged) else "Open"
     tracked = {"status": "status", "owner": "owner", "followup_assigned_to": "follow-up assignee",
                "demo_status": "demo status", "payment_status": "payment status", "invoice_status": "invoice status"}
     for f in tracked:
@@ -1559,6 +1598,7 @@ async def compute_metrics(emp_id, s, e):
     # Archived leads are left out, like the lead lists these counts open (and the Reports page).
     owned = await db.leads.find({"owner": emp_id, "archived": {"$ne": True}}).to_list(5000)
     ls = lambda st: sum(1 for l in owned if l.get("status") == st)
+    paid = sum(1 for l in owned if lead_is_paid(l))   # Paid = Converted
     tq = {"assigned_to": emp_id, "status": "Completed"}
     if s and e: tq["completed_at"] = {"$gte": s, "$lte": e}
     tasks_done = await db.tasks.count_documents(tq)
@@ -1572,8 +1612,8 @@ async def compute_metrics(emp_id, s, e):
             "follow_ups": ct("Follow-up"), "responses": sum(1 for a in acts if a.get("outcome")),
             "interested": ls("Interested"), "demos_booked": ls("Demo Booked"), "demos_completed": ls("Demo Completed"),
             "demo_noshows": ls("Demo No-show"), "trials": ls("Trial"), "pricing_shared": ls("Pricing Shared"),
-            "invoices": ls("Invoice Raised"), "payment_pending": ls("Payment Pending"), "paid": ls("Paid"),
-            "conversions": ls("Converted"), "lost": ls("Lost") + ls("Not Interested"), "closed": ls("Closed"),
+            "invoices": ls("Invoice Raised"), "payment_pending": ls("Payment Pending"), "paid": paid,
+            "conversions": paid, "lost": ls("Lost") + ls("Not Interested"), "closed": ls("Closed"),
             "tasks_completed": tasks_done, "overdue_follow_ups": overdue}
 
 @api.get("/performance/team")
@@ -1598,7 +1638,8 @@ async def my_perf(request: Request, user: dict = Depends(get_current_user)):
 
 # ---------- reports ----------
 # Funnel steps (label -> lead status; None = all leads). Each step is the number of leads whose status is
-# exactly that one — the same leads All Leads lists under that status filter. Demo-pipeline data is not used here.
+# exactly that one — the same leads All Leads lists under that status filter — except the two paid steps, which
+# both count paid leads (Paid = Converted; All Leads ?paid=1). Demo-pipeline data is not used here.
 FUNNEL_STEPS = [("Leads Generated", None), ("People Contacted", "Contacted"), ("Any Reply", "Replied"),
                 ("Idea Explained", "Replied"), ("Interested / Asked for Demo", "Interested"),
                 ("Demo Booked", "Demo Booked"), ("Demo Completed", "Demo Completed"),
@@ -1614,6 +1655,23 @@ def lead_has_demo(l):
 
 def lead_demo_done(l):
     return bool(l.get("status") == "Demo Completed" or l.get("demo_status") == "Completed" or l.get("demo_completed_at"))
+
+# The same two rules as database queries, for the Demo Pipeline list (GET /leads?demo=...).
+HAS_DEMO_Q = {"$or": [{"demo_date": HAS_DATE}, {"demo_status": HAS_DATE}, {"status": {"$in": list(DEMO_STAGES)}}]}
+_DEMO_DONE = [{"status": "Demo Completed"}, {"demo_status": "Completed"}, {"demo_completed_at": HAS_DATE}]
+# A demo's outcome is its demo status; leads from before demo statuses existed only have the matching stage.
+_DEMO_NO_SHOW = [{"demo_status": {"$in": ["No-show", "No Show"]}}, {"status": "Demo No-show"}]
+_DEMO_RESCHEDULED = [{"demo_status": "Rescheduled"}, {"status": "Rescheduled"}]
+DEMO_FILTERS = {
+    "all": {},
+    # Booked and still to happen: no outcome recorded yet.
+    "booked": {"$nor": _DEMO_DONE + _DEMO_NO_SHOW + _DEMO_RESCHEDULED + [{"demo_status": "Cancelled"}]},
+    "not_complete": {"$nor": _DEMO_DONE},   # = Reports "Demos" minus "Demos completed"
+    "completed": {"$or": _DEMO_DONE},
+    "no_show": {"$or": _DEMO_NO_SHOW},
+    "rescheduled": {"$or": _DEMO_RESCHEDULED},
+    "not_paid": {"$nor": PAID_Q["$or"]},     # Paid = Converted
+}
 
 OUTREACH_TYPES = ("Call", "WhatsApp", "Instagram", "LinkedIn", "Email")
 
@@ -1658,10 +1716,14 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
     by_owner.sort(key=lambda r: -r["count"])
     lost = sum(1 for l in leads if l.get("status") in LOST_STATUSES)
     total_leads = len(leads)
+    # Paid = Converted: one count for payments, conversions and the paid funnel steps (All Leads ?paid=1).
+    paid_leads = sum(1 for l in leads if lead_is_paid(l))
+    pct = lambda n: round(n / total_leads * 100) if total_leads else 0
     funnel = []
     for lab, st in FUNNEL_STEPS:
-        cnt = total_leads if st is None else by_stage.get(st, 0)
-        funnel.append({"stage": lab, "status": st, "count": cnt, "pct": round(cnt / total_leads * 100) if total_leads else 0})
+        is_paid_step = st in PAID_STAGES
+        cnt = total_leads if st is None else paid_leads if is_paid_step else by_stage.get(st, 0)
+        funnel.append({"stage": lab, "status": st, "paid": is_paid_step, "count": cnt, "pct": pct(cnt)})
     # Average days from Demo Completed -> Invoice Paid (real dates only)
     diffs = []
     for l in leads:
@@ -1717,7 +1779,8 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
              "demos_completed": sum(1 for l in leads if lead_demo_done(l)),
              "trials": by_stage.get("Trial", 0), "follow_ups": follow_ups, "follow_ups_open": follow_ups_open,
              "invoices": by_stage.get("Invoice Raised", 0),
-             "payments": by_stage.get("Paid", 0), "conversions": by_stage.get("Converted", 0), "losses": lost}
+             "payments": paid_leads, "conversions": paid_leads, "losses": lost,
+             "overall_conversion": pct(paid_leads)}   # % of the period's leads that are paid
     return {"by_stage": [{"stage": k, "count": v} for k, v in by_stage.items()],
             "by_source": [{"source": k, "count": v} for k, v in by_source.items()],
             "by_owner": by_owner,
@@ -1725,7 +1788,7 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
             "by_employee": by_employee,
             "daily": [{"date": k, "count": v} for k, v in sorted(daily.items())[-30:]],
             "funnel": funnel, "lost": lost, "sales": sales, "avg_days_demo_to_paid": avg_days, "avg_days_sample": len(diffs),
-            "totals": {"total_leads": len(leads), "converted": by_stage.get("Converted", 0),
+            "totals": {"total_leads": len(leads), "converted": paid_leads,
                        "demos": demos, "trials": by_stage.get("Trial", 0)}}
 
 # ---------- audit ----------
@@ -1769,7 +1832,7 @@ async def export_csv(start: Optional[str] = None, end: Optional[str] = None, mgr
                     l.get("team", ""), l.get("status", ""), l.get("last_interaction_at", ""), l.get("last_contacted_by_name", ""),
                     l.get("total_interactions", 0), l.get("next_follow_up", ""), users.get(l.get("followup_assigned_to"), ""),
                     users.get(l.get("demo_owner"), ""), l.get("demo_status", ""), l.get("invoice_status", ""),
-                    l.get("payment_status", ""), l.get("conversion_status", ""), l.get("lost_reason", ""),
+                    l.get("payment_status", ""), "Converted" if lead_is_paid(l) else l.get("conversion_status", ""), l.get("lost_reason", ""),
                     l.get("notes", ""), l.get("created_at", "")]])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
@@ -1851,8 +1914,16 @@ async def import_parse(file: UploadFile = File(...), mgr: dict = Depends(require
         columns.append(h if seen[h] == 1 else f"{h} ({seen[h]})")
     keep = [i for i, c in enumerate(columns) if any(r[i] for r in grid[header_idx + 1:]) or not c.startswith("Column ")]
     columns = [columns[i] for i in keep]
-    rows = [{columns[j]: r[i] for j, i in enumerate(keep)} for r in grid[header_idx + 1:] if any(r)][:2000]
-    return {"columns": columns, "rows": rows, "total": len(rows)}
+    # IMPORT_ROW_KEY = the row's number in the uploaded sheet (1-based, header included), so the import result
+    # can point at the exact rows it skipped.
+    rows = [{**{columns[j]: r[i] for j, i in enumerate(keep)}, IMPORT_ROW_KEY: n}
+            for n, r in enumerate(grid[header_idx + 1:], start=header_idx + 2) if any(r)]
+    # Rows past the limit are not imported; the count is returned so the UI can say so instead of dropping them silently.
+    return {"columns": columns, "rows": rows[:IMPORT_MAX_ROWS], "total": min(len(rows), IMPORT_MAX_ROWS),
+            "over_limit": max(len(rows) - IMPORT_MAX_ROWS, 0)}
+
+IMPORT_ROW_KEY = "__row__"
+IMPORT_MAX_ROWS = 2000
 
 def _import_cell(v):
     v = str(v).strip()
@@ -1922,11 +1993,13 @@ class ImportCommit(BaseModel):
 @api.post("/import/commit")
 async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)):
     m = body.mapping
+    if len(body.rows) > IMPORT_MAX_ROWS:
+        raise HTTPException(400, f"Import at most {IMPORT_MAX_ROWS} rows at a time")
     # Owner comes from the sheet whenever an Owner column is mapped. The importer (recorded as added_by) is only
     # the owner when the file has no Owner column at all — same as a manually created lead.
     owner_mapped = bool(m.get("owner"))
     default_owner = body.owner or mgr["id"]
-    imported = dups = invalid = 0
+    imported = dups = invalid = missing_name = 0
     details = []
     seen_phone, seen_email, seen_rows = set(), set(), set()
 
@@ -1959,10 +2032,17 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
                     return val
         return ""
 
-    for row in body.rows[:2000]:
+    for i, row in enumerate(body.rows):
+        # Sheet row number from /import/parse; position in the request for direct API calls.
+        try:
+            row_no = int(row.get(IMPORT_ROW_KEY))
+        except (TypeError, ValueError):
+            row_no = i + 1
+        note = lambda status, reason=None: details.append({"row": row_no, "name": name or "(blank)", "status": status,
+                                                           **({"reason": reason} if reason else {})})
         name = g(row, "name", "lead")
-        if not name:
-            invalid += 1; details.append({"name": "(blank)", "status": "invalid", "reason": "missing name"}); continue
+        if not name:   # checked first: a nameless row is never inserted, and never counted as a duplicate
+            missing_name += 1; note("missing_name", "Name is missing"); continue
 
         raw_status = g(row, "status", "stage")
         status = stage_by_key.get(_stage_key(raw_status)) if raw_status else "New Lead"
@@ -1976,7 +2056,7 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
                 "won": "Converted",
             }.get(_stage_key(raw_status))
         if not status:
-            invalid += 1; details.append({"name": name, "status": "invalid", "reason": f"unknown status '{raw_status}'"}); continue
+            invalid += 1; note("invalid", f"unknown status '{raw_status}'"); continue
 
         phone = g(row, "phone", "contact")
         email = g(row, "email")
@@ -2013,7 +2093,7 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
                          and re.split(r"\n?(?:Last interaction|Next follow-up): ", l.get("notes") or "")[0] == notes
                          for l in (phone_lead, email_lead)))
         if is_dup:
-            dups += 1; details.append({"name": name, "status": "duplicate"}); continue
+            dups += 1; note("duplicate", "Duplicate of an existing lead"); continue
 
         # Owner resolution
         lead_owner = default_owner
@@ -2023,7 +2103,7 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
             if raw_owner.lower() not in IMPORT_BLANKS:
                 lead_owner = _resolve_import_owner(raw_owner, users_list)
                 if not lead_owner:
-                    invalid += 1; details.append({"name": name, "status": "invalid", "reason": f"unknown owner '{raw_owner}'"}); continue
+                    invalid += 1; note("invalid", f"unknown owner '{raw_owner}'"); continue
 
         # Last interaction
         raw_last = g(row, "last_interaction_at", "last_interaction", "last_contact")
@@ -2103,7 +2183,7 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
             "demo_owner": lead_owner if demo_status else None,
             "invoice_status": None,
             "payment_status": payment_status,
-            "conversion_status": "Converted" if status == "Converted" else "Open",
+            "conversion_status": "Converted" if lead_is_paid({"status": status, "payment_status": payment_status}) else "Open",
             "custom": {},
             "response": "",
             "last_interaction_at": last_interaction_at,
@@ -2123,13 +2203,15 @@ async def import_commit(body: ImportCommit, mgr: dict = Depends(require_manager)
         if nl: doc["normalized_linkedin"] = nl
         doc["import_key"] = row_key; seen_rows.add(row_key)
         try:
-            await db.leads.insert_one(dict(doc)); imported += 1; details.append({"name": name, "status": "imported"})
+            await db.leads.insert_one(dict(doc)); imported += 1; note("imported")
         except DuplicateKeyError:
-            dups += 1; details.append({"name": name, "status": "duplicate"})
-    await audit(mgr, "import", "lead", "batch", detail=f"{imported} imported, {dups} duplicates, {invalid} invalid")
-    # Invalid rows first so the UI can list what needs fixing even on large imports.
-    details.sort(key=lambda d: d["status"] != "invalid")
-    return {"total": len(body.rows), "imported": imported, "duplicates": dups, "invalid": invalid, "details": details[:200]}
+            dups += 1; note("duplicate", "Duplicate of an existing lead")
+    await audit(mgr, "import", "lead", "batch", detail=f"{imported} imported, {dups} duplicates, {missing_name} missing name, {invalid} invalid")
+    # Skipped rows first (in sheet order) so the UI can list what needs fixing. Every row has exactly one outcome,
+    # so imported + duplicates + missing_name + invalid == total.
+    details.sort(key=lambda d: (d["status"] == "imported", d["row"]))
+    return {"total": len(body.rows), "imported": imported, "duplicates": dups, "missing_name": missing_name,
+            "invalid": invalid, "details": details}
 
 # ---------- follow-up reminders ----------
 @api.get("/reminders/preview")

@@ -1,6 +1,7 @@
 """Beet.Health CRM backend API test suite (OTP auth + RBAC + dup + config)."""
 import os
 import time
+import uuid
 import pytest
 import requests
 
@@ -27,6 +28,12 @@ STRANGER = "stranger@beet.health"
 
 def _h(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _contact():
+    """Unique Email / LinkedIn / Instagram: required on every new lead, and each must be unused."""
+    t = uuid.uuid4().hex[:10]
+    return {"email": f"qa_{t}@example.com", "linkedin": f"linkedin.com/in/qa-{t}", "instagram": f"@qa_{t}"}
 
 
 def _login(email):
@@ -205,18 +212,18 @@ class TestDuplicates:
         with_phone = next((l for l in leads if l.get("phone")), None)
         assert with_phone
         r = requests.post(f"{API}/leads",
-                          json={"name": "TEST_DupPhone", "phone": with_phone["phone"]},
+                          json={"name": "TEST_DupPhone", "phone": with_phone["phone"], **_contact()},
                           headers=_h(mgr["token"]))
         assert r.status_code == 409
 
     def test_create_lead_new_phone_ok(self, mgr):
-        payload = {"name": "TEST_UniquePhone", "phone": "+19995551234", "email": "TEST_unique@beet.health"}
+        payload = {**_contact(), "name": "TEST_UniquePhone", "phone": "+19995551234", "email": "TEST_unique@beet.health"}
         r = requests.post(f"{API}/leads", json=payload, headers=_h(mgr["token"]))
         assert r.status_code == 200, r.text
         lid = r.json()["id"]
         # same name allowed
         r2 = requests.post(f"{API}/leads",
-                           json={"name": "TEST_UniquePhone", "phone": "+19995551235", "email": "TEST_unique2@beet.health"},
+                           json={**_contact(), "name": "TEST_UniquePhone", "phone": "+19995551235", "email": "TEST_unique2@beet.health"},
                            headers=_h(mgr["token"]))
         assert r2.status_code == 200
         lid2 = r2.json()["id"]
@@ -251,7 +258,7 @@ class TestConfig:
         sid = r.json()["id"]
         # create lead using new stage
         r2 = requests.post(f"{API}/leads",
-                           json={"name": "TEST_NurtureLead", "phone": "+19995559911", "status": "TEST_Nurture"},
+                           json={"name": "TEST_NurtureLead", "phone": "+19995559911", "status": "TEST_Nurture", **_contact()},
                            headers=_h(mgr["token"]))
         assert r2.status_code == 200
         assert r2.json()["status"] == "TEST_Nurture"
@@ -264,7 +271,7 @@ class TestLostReason:
     def test_lost_requires_reason(self, mgr, harry):
         # create a lead owned by mgr to control
         r = requests.post(f"{API}/leads",
-                          json={"name": "TEST_LostReason", "phone": "+19995558801", "owner": harry["user"]["id"]},
+                          json={"name": "TEST_LostReason", "phone": "+19995558801", "owner": harry["user"]["id"], **_contact()},
                           headers=_h(mgr["token"]))
         assert r.status_code == 200
         lid = r.json()["id"]
@@ -312,7 +319,7 @@ class TestActivities:
 class TestAssignment:
     def test_reassign_owner_changes_access(self, mgr, harry, leo):
         r = requests.post(f"{API}/leads",
-                          json={"name": "TEST_ReassignFlow", "phone": "+19995558822", "owner": harry["user"]["id"]},
+                          json={"name": "TEST_ReassignFlow", "phone": "+19995558822", "owner": harry["user"]["id"], **_contact()},
                           headers=_h(mgr["token"]))
         assert r.status_code == 200
         lid = r.json()["id"]
@@ -439,7 +446,7 @@ class TestCustomFields:
         # create lead with custom
         r2 = requests.post(f"{API}/leads",
                            json={"name": "TEST_CFLead", "phone": "+19995557001",
-                                 "custom": {key: "Large"}}, headers=_h(mgr["token"]))
+                                 "custom": {key: "Large"}, **_contact()}, headers=_h(mgr["token"]))
         assert r2.status_code == 200
         lid = r2.json()["id"]
         try:
@@ -511,7 +518,7 @@ class TestImport:
         assert commit.status_code == 200, commit.text
         summary = commit.json()
         assert summary["total"] == 4
-        assert summary["invalid"] >= 1
+        assert summary["missing_name"] == 1   # the blank-name row: skipped, never inserted
         assert summary["duplicates"] >= 1
         assert summary["imported"] >= 1
 

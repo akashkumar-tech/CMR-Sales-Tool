@@ -38,6 +38,7 @@ saved & shared filter views, duplicate prevention (normalized phone/email/IG/Lin
 | `EMAIL_FROM_NAME` | Sender display name (e.g. `Beet.Health`) |
 | `APP_URL` | Public app URL used in email deep-links |
 | `OTP_DEV_MODE` | `true` shows the OTP on screen/response (preview only). **Set `false` in production** — then the code is only emailed, and a failed send returns an error. |
+| `DEV_MODE` | `true` skips email OTP verification: an approved, active email signs in straight away (no code is created or sent). Missing = `false`. **Local only — never enable on a public deployment.** |
 | `APPROVED_EMAIL_DOMAIN` | Only emails at this domain can be added as staff (e.g. `beet.health`; empty = any) |
 | `APP_TIMEZONE` | Team time zone for "today", report periods and the 08:00 reminder (default `Asia/Kolkata`) |
 

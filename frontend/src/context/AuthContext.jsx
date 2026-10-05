@@ -15,12 +15,15 @@ export function AuthProvider({ children }) {
     api.get("/auth/me").then((r) => setUser(r.data)).catch(() => localStorage.removeItem("beet_token")).finally(() => setLoading(false));
   }, []);
 
-  const requestOtp = async (email) => (await api.post("/auth/request-otp", { email })).data;
+  const startSession = (data) => { localStorage.setItem("beet_token", data.token); setUser(data.user); return data.user; };
+  const requestOtp = async (email) => {
+    const { data } = await api.post("/auth/request-otp", { email });
+    if (data.token) startSession(data);   // backend DEV_MODE: OTP skipped, already signed in
+    return data;
+  };
   const verifyOtp = async (email, otp) => {
     const { data } = await api.post("/auth/verify-otp", { email, otp });
-    localStorage.setItem("beet_token", data.token);
-    setUser(data.user);
-    return data.user;
+    return startSession(data);
   };
   const logout = () => {
     // Revoke this session server-side (explicit header: the token is removed from storage right below).

@@ -33,7 +33,9 @@ def login(email):
 
 
 def lead(h, **kw):
-    body = {"name": f"QA {RUN} {uuid.uuid4().hex[:6]}"}
+    t = uuid.uuid4().hex[:10]
+    # Email / LinkedIn / Instagram are required on a new lead and must be unique.
+    body = {"name": f"QA {RUN} {t[:6]}", "email": f"qa_{t}@example.com", "linkedin": f"linkedin.com/in/qa-{t}", "instagram": f"@qa_{t}"}
     body.update(kw)
     r = requests.post(f"{API}/leads", json=body, headers=h)
     assert r.status_code == 200, r.text
@@ -191,9 +193,9 @@ def test_bug035_input_validation(mgr):
 def test_bug034_instagram_and_linkedin_duplicates_blocked(mgr):
     h, _ = mgr
     lead(h, instagram=f"@qa.handle.{RUN}", linkedin=f"https://linkedin.com/in/qa-{RUN}")
-    r = requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} dupe", "instagram": f"qa.handle.{RUN}"})
+    r = requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} dupe", "instagram": f"qa.handle.{RUN}", "email": f"d1_{RUN}@example.com", "linkedin": f"linkedin.com/in/d1-{RUN}"})
     assert r.status_code == 409 and r.json()["detail"]["existing_id"]
-    r = requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} dupe2", "linkedin": f"HTTP://LinkedIn.com/in/QA-{RUN}/"})
+    r = requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} dupe2", "linkedin": f"HTTP://LinkedIn.com/in/QA-{RUN}/", "email": f"d2_{RUN}@example.com", "instagram": f"@d2_{RUN}"})
     assert r.status_code == 409
 
 
@@ -285,7 +287,9 @@ def test_bug013_funnel_counts_match_all_leads(mgr):
     assert d["Demo Booked"] == 0 and d["People Contacted"] == 0 and d["Clients Added"] == 0
     rep = requests.get(f"{API}/reports", headers=h, params={"period": "all"}).json()
     for f in rep["funnel"]:
-        listed = requests.get(f"{API}/leads", headers=h, params={"status": f["status"]} if f["status"] else {}).json()
+        # The paid steps count paid leads (Paid = Converted), which All Leads lists under ?paid=1.
+        q = {"paid": "1"} if f.get("paid") else {"status": f["status"]} if f["status"] else {}
+        listed = requests.get(f"{API}/leads", headers=h, params=q).json()
         assert f["count"] == len(listed), f["stage"]
 
 
@@ -411,7 +415,7 @@ def test_bug043_required_custom_fields(admin):
     h, _ = admin
     cf = requests.post(f"{API}/custom-fields", headers=h, json={"label": f"QA Req {RUN}", "type": "text", "required": True}).json()
     try:
-        assert requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} nocf"}).status_code == 400
+        assert requests.post(f"{API}/leads", headers=h, json={"name": f"QA {RUN} nocf", "email": f"nocf_{RUN}@example.com", "linkedin": f"linkedin.com/in/nocf-{RUN}", "instagram": f"@nocf_{RUN}"}).status_code == 400
         l = lead(h, custom={cf["key"]: "value"})
         r = requests.put(f"{API}/leads/{l['id']}", headers=h, json={"custom": {cf["key"]: ""}})
         assert r.status_code == 400

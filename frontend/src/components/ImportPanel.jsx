@@ -86,6 +86,8 @@ export default function ImportPanel() {
   const [mapping, setMapping] = useState({});
   const [summary, setSummary] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Every row the backend did not insert, with its sheet row number and reason.
+  const skippedRows = (summary?.details || []).filter((d) => d.status !== "imported");
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
@@ -96,7 +98,8 @@ export default function ImportPanel() {
       const { data } = await api.post("/import/parse", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setParsed(data);
       setMapping(guessMapping(data.columns));
-      toast.success(`Read ${data.total} rows`);
+      if (data.over_limit) toast.warning(`Only the first ${data.total} rows can be imported at once — ${data.over_limit} more rows were not read. Split the file to import them.`);
+      else toast.success(`Read ${data.total} rows`);
     } catch (err) { toast.error(apiError(err)); } finally { setBusy(false); }
   };
 
@@ -106,7 +109,8 @@ export default function ImportPanel() {
     try {
       const { data } = await api.post("/import/commit", { mapping, rows: parsed.rows });
       setSummary(data);
-      toast.success(`${data.imported} imported, ${data.duplicates} duplicates skipped`);
+      const skipped = data.duplicates + data.missing_name + data.invalid;
+      toast.success(`${data.imported} imported${skipped ? `, ${skipped} skipped` : ""}`);
     } catch (err) { toast.error(apiError(err)); } finally { setBusy(false); }
   };
 
@@ -148,16 +152,29 @@ export default function ImportPanel() {
       {summary && (
         <div data-testid="import-summary" className="rounded-lg border border-border p-4 bg-slate-50 text-sm">
           <p className="font-semibold text-slate-900 mb-2">Import summary</p>
-          <div className="grid grid-cols-4 gap-3 text-center">
+          <div className="grid grid-cols-5 gap-3 text-center">
             <div><p className="text-xl font-extrabold text-slate-900">{summary.total}</p><p className="text-xs text-slate-500">Uploaded</p></div>
-            <div><p className="text-xl font-extrabold text-emerald-600">{summary.imported}</p><p className="text-xs text-slate-500">New imported</p></div>
-            <div><p className="text-xl font-extrabold text-amber-600">{summary.duplicates}</p><p className="text-xs text-slate-500">Duplicates</p></div>
-            <div><p className="text-xl font-extrabold text-rose-600">{summary.invalid}</p><p className="text-xs text-slate-500">Need review</p></div>
+            <div><p data-testid="import-imported" className="text-xl font-extrabold text-emerald-600">{summary.imported}</p><p className="text-xs text-slate-500">Imported</p></div>
+            <div><p data-testid="import-duplicates" className="text-xl font-extrabold text-amber-600">{summary.duplicates}</p><p className="text-xs text-slate-500">Duplicates</p></div>
+            <div><p data-testid="import-missing-name" className="text-xl font-extrabold text-rose-600">{summary.missing_name}</p><p className="text-xs text-slate-500">Name missing</p></div>
+            <div><p data-testid="import-invalid" className="text-xl font-extrabold text-rose-600">{summary.invalid}</p><p className="text-xs text-slate-500">Other issues</p></div>
           </div>
-          {summary.details?.some((d) => d.status === "invalid") && (
-            <ul data-testid="import-invalid-list" className="mt-3 max-h-40 overflow-y-auto scrollbar-thin text-xs text-rose-700 space-y-0.5">
-              {summary.details.filter((d) => d.status === "invalid").map((d, i) => <li key={i}>{d.name} — {d.reason}</li>)}
-            </ul>
+          {skippedRows.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold text-slate-700 mb-1">Skipped rows ({skippedRows.length}) — not imported</p>
+              <div className="max-h-56 overflow-y-auto scrollbar-thin border border-border rounded-md bg-white">
+                <table data-testid="import-skipped-table" className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-500 sticky top-0"><tr><th className="px-2 py-1 text-left font-semibold">Row</th><th className="px-2 py-1 text-left font-semibold">Name</th><th className="px-2 py-1 text-left font-semibold">Reason</th></tr></thead>
+                  <tbody>{skippedRows.map((d) => (
+                    <tr key={d.row} className="border-t border-border">
+                      <td className="px-2 py-1 text-slate-600">{d.row}</td>
+                      <td className="px-2 py-1 text-slate-600">{d.name}</td>
+                      <td className={`px-2 py-1 ${d.status === "duplicate" ? "text-amber-700" : "text-rose-700"}`}>{d.reason}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
           )}
         </div>
       )}

@@ -4,13 +4,11 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useAutoRefresh } from "@/lib/useAutoRefresh";
 import { Card } from "@/components/ui/card";
+import SalesFunnel, { LOST_STATUSES } from "@/components/SalesFunnel";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineChart, Line, CartesianGrid } from "recharts";
 
 const COLORS = ["#E11D6B", "#0D9488", "#F59E0B", "#8B5CF6", "#0EA5E9", "#E11D48", "#10B981", "#6366F1"];
 const PERIODS = [["all", "All time"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"], ["custom", "Custom"]];
-const FUNNEL_COLORS = ["#6366F1", "#4F46E5", "#7C3AED", "#8B5CF6", "#A855F7", "#C026D3", "#D946EF", "#EC4899", "#F43F5E", "#10B981"];
-// Statuses counted as losses by the backend (LOST_STATUSES in server.py) — the drill-down must list all of them.
-const LOST_STATUSES = "Lost,Not Interested,Closed";
 
 export default function Reports() {
   const { isManager } = useAuth();
@@ -53,6 +51,8 @@ export default function Reports() {
     navigate(qs ? `${leadBase}?${qs}` : leadBase);
   };
   const goStatus = (status) => goLeads(status ? { status } : {});
+  // Paid = Converted: payments and conversions are the same leads (backend lead_is_paid).
+  const goPaid = goLeads({ paid: "1" });
 
   const Stat = ({ label, value, tone, onClick, testid }) => (
     <Card data-testid={testid} onClick={onClick} className={`p-4 ${onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-transform" : ""}`}>
@@ -94,39 +94,17 @@ export default function Reports() {
             <Stat testid="stat-sales-outreach" label="Outreach logged"value={data.sales.outreach} tone="text-emerald-600" />
             <Stat testid="stat-sales-responses" label="Responses" value={data.sales.responses} tone="text-blue-600" onClick={goStatus("Replied")} />
             <Stat testid="stat-sales-demos" label="Demos" value={data.sales.demos} tone="text-purple-600" onClick={() => navigate("/demos")} />
-            <Stat testid="stat-sales-demos-completed" label="Demos completed" value={data.sales.demos_completed} tone="text-purple-700" onClick={() => navigate("/demos")} />
+            <Stat testid="stat-sales-demos-completed" label="Demos completed" value={data.sales.demos_completed} tone="text-purple-700" onClick={() => navigate("/demos?demo=completed")} />
             <Stat testid="stat-sales-trials" label="Trials" value={data.sales.trials} tone="text-teal-600" onClick={goStatus("Trial")} />
             <Stat testid="stat-sales-followups-open" label="Follow-ups pending" value={data.sales.follow_ups_open} tone="text-amber-600" onClick={goLeads({ follow_up: "pending" })} />
             <Stat testid="stat-sales-followups" label="Follow-ups logged" value={data.sales.follow_ups} tone="text-amber-700" />
             <Stat testid="stat-sales-invoices" label="Invoices" value={data.sales.invoices} tone="text-indigo-600" onClick={goStatus("Invoice Raised")} />
-            <Stat testid="stat-sales-payments" label="Payments" value={data.sales.payments} tone="text-emerald-700" onClick={goStatus("Paid")} />
-            <Stat testid="stat-sales-conversions" label="Conversions" value={data.sales.conversions} tone="text-emerald-600" onClick={goStatus("Converted")} />
+            <Stat testid="stat-sales-payments" label="Payments" value={data.sales.payments} tone="text-emerald-700" onClick={goPaid} />
+            <Stat testid="stat-sales-conversions" label="Conversions" value={data.sales.conversions} tone="text-emerald-600" onClick={goPaid} />
             <Stat testid="stat-sales-losses" label="Losses" value={data.sales.losses} tone="text-rose-600" onClick={goStatus(LOST_STATUSES)} />
           </div>
 
-          <Card className="p-5" data-testid="sales-funnel">
-            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-              <h3 className="font-bold text-slate-900">Sales Funnel</h3>
-              <div data-testid="avg-days-demo-paid" className="text-xs bg-accent text-accent-foreground rounded-lg px-3 py-1.5 font-semibold">
-                Avg days Demo Completed → Invoice Paid: <b>{data.avg_days_demo_to_paid == null ? "—" : `${data.avg_days_demo_to_paid} days`}</b>
-                {data.avg_days_sample ? <span className="font-normal text-slate-500"> ({data.avg_days_sample} paid)</span> : null}
-              </div>
-            </div>
-            <div className="space-y-2">
-              {data.funnel.map((f, i) => (
-                <button key={f.stage} data-testid={`funnel-step-${i}`} onClick={goStatus(f.status)} className="w-full group">
-                  <div className="flex items-center gap-3">
-                    <span className="w-52 text-right text-xs font-medium text-slate-600 shrink-0">{f.stage}</span>
-                    <div className="flex-1 h-8 bg-slate-100 rounded-md overflow-hidden">
-                      <div className="h-full rounded-md flex items-center justify-end pr-2 text-white text-xs font-bold transition-all group-hover:brightness-95" style={{ width: `${Math.max(f.pct, 4)}%`, background: FUNNEL_COLORS[i % FUNNEL_COLORS.length] }}>{f.count}</div>
-                    </div>
-                    <span className="w-12 text-xs font-semibold text-slate-500 shrink-0">{f.pct}%</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-slate-500 mt-3">Overall conversion: <b className="text-emerald-600">{data.funnel[0].count ? Math.round(data.sales.conversions / data.funnel[0].count * 100) : 0}%</b> · Lost/Closed in period: <button onClick={goStatus(LOST_STATUSES)} className="text-rose-600 font-semibold hover:underline">{data.lost}</button></p>
-          </Card>
+          <SalesFunnel data={data} onStep={(f) => (f.paid ? goPaid : goStatus(f.status))} onLost={goStatus(LOST_STATUSES)} />
 
           <div className="grid lg:grid-cols-2 gap-6">
             <Card className="p-5" data-testid="chart-by-stage">
