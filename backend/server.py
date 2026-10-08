@@ -1563,22 +1563,36 @@ async def delete_task(tid: str, user: dict = Depends(get_current_user)):
 
 # ---------- performance ----------
 def period_bounds(period, start, end):
-    """(start, end) as UTC ISO strings; periods follow the team's local calendar (APP_TIMEZONE)."""
+    """(start, end) as UTC ISO strings; rolling windows ending at the current moment (APP_TIMEZONE).
+    All periods end NOW and roll backward:
+      day     = last 24 hours
+      week    = last 7 days
+      month   = last 30 or 31 days (calendar-month length of the current month)
+      quarter = last 91 days
+      year    = last 365 days
+      custom  = caller-supplied YYYY-MM-DD date range (local midnight → midnight)
+      all / None = no date restriction
+    """
     now = datetime.now(timezone.utc)
-    today = datetime.now(APP_TZ).date()
-    first = None
+    now_local = datetime.now(APP_TZ)
     if period in ("today", "day"):
-        first = today
+        start_utc = (now - timedelta(hours=24)).isoformat()
+        return start_utc, now.isoformat()
     elif period == "week":
-        first = today - timedelta(days=today.weekday())
+        start_utc = (now - timedelta(days=7)).isoformat()
+        return start_utc, now.isoformat()
     elif period == "month":
-        first = today.replace(day=1)
+        # Use the number of days in the current local month for an intuitive rolling window.
+        import calendar as _cal
+        days_in_month = _cal.monthrange(now_local.year, now_local.month)[1]
+        start_utc = (now - timedelta(days=days_in_month)).isoformat()
+        return start_utc, now.isoformat()
     elif period == "quarter":
-        first = today.replace(month=(today.month - 1) // 3 * 3 + 1, day=1)
+        start_utc = (now - timedelta(days=91)).isoformat()
+        return start_utc, now.isoformat()
     elif period == "year":
-        first = today.replace(month=1, day=1)
-    if first:
-        return local_day_start_utc(first), now.isoformat()
+        start_utc = (now - timedelta(days=365)).isoformat()
+        return start_utc, now.isoformat()
     if period == "custom" and start and end:
         try:
             sd, ed = date.fromisoformat(start[:10]), date.fromisoformat(end[:10])
@@ -1775,12 +1789,19 @@ async def reports(request: Request, user: dict = Depends(get_current_user)):
 
     demos = sum(1 for l in leads if lead_has_demo(l))
     # Responses = leads whose status is "Replied" (what All Leads lists for that status), not activity outcomes.
+    # Overall conversion: payment_status="Paid" (source of truth for payment) divided by
+    # paid_leads (the Invoice Paid funnel step count = lead_is_paid() = payment_status=="Paid"
+    # OR status in ["Paid","Converted"]). This is the exact same set the "paid (converted)"
+    # drill-down opens, so a lead with status="Payment Pending" but payment_status="Paid"
+    # (like Saraswathi in the screenshot) counts in BOTH numerator and denominator → 100%.
+    payment_paid_count = sum(1 for l in leads if l.get("payment_status") == "Paid")
+    overall_conv = round(payment_paid_count / paid_leads * 100) if paid_leads else 0
     sales = {"leads": len(leads), "outreach": outreach, "responses": by_stage.get("Replied", 0), "demos": demos,
              "demos_completed": sum(1 for l in leads if lead_demo_done(l)),
              "trials": by_stage.get("Trial", 0), "follow_ups": follow_ups, "follow_ups_open": follow_ups_open,
              "invoices": by_stage.get("Invoice Raised", 0),
              "payments": paid_leads, "conversions": paid_leads, "losses": lost,
-             "overall_conversion": pct(paid_leads)}   # % of the period's leads that are paid
+             "overall_conversion": overall_conv}
     return {"by_stage": [{"stage": k, "count": v} for k, v in by_stage.items()],
             "by_source": [{"source": k, "count": v} for k, v in by_source.items()],
             "by_owner": by_owner,

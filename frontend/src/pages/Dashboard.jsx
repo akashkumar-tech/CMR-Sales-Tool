@@ -16,8 +16,8 @@ import {
 // Activity types behind the "Calls Made" / "Messages Sent" counts (see compute_metrics in the backend).
 const CALL_TYPES = "Call";
 const MESSAGE_TYPES = "WhatsApp,Instagram,LinkedIn,Email";
-// Sales Funnel periods — same values Reports sends to /reports (period_bounds in server.py: Asia/Kolkata calendar
-// periods to date, Week from Monday; "all" = no date filter).
+// Sales Funnel periods — same values Reports sends to /reports (period_bounds in server.py: rolling windows
+// ending NOW: day=last 24h, week=last 7d, month=last 30/31d, year=last 365d; "all" = no date filter).
 const FUNNEL_PERIODS = [["all", "All Time"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["year", "Year"]];
 const SELECT = "h-9 rounded-lg border border-border text-sm px-3 text-slate-600";   // same as the Reports filters
 
