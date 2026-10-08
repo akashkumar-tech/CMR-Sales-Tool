@@ -18,7 +18,6 @@ export function AuthProvider({ children }) {
   const startSession = (data) => { localStorage.setItem("beet_token", data.token); setUser(data.user); return data.user; };
   const requestOtp = async (email) => {
     const { data } = await api.post("/auth/request-otp", { email });
-    if (data.token) startSession(data);   // backend DEV_MODE: OTP skipped, already signed in
     return data;
   };
   const verifyOtp = async (email, otp) => {

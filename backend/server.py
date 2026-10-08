@@ -25,9 +25,6 @@ db = client[os.environ['DB_NAME']]
 
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
-OTP_DEV_MODE = os.environ.get("OTP_DEV_MODE", "false").lower() == "true"
-# DEV_MODE skips email OTP verification entirely (approved, active users only). Missing / anything but "true" = off.
-DEV_MODE = os.environ.get("DEV_MODE", "false").strip().lower() == "true"
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Beet.Health CRM")
@@ -45,8 +42,6 @@ app = FastAPI()
 api = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("beet")
-if DEV_MODE:
-    logger.warning("DEV_MODE is ON: email OTP verification is disabled. Never enable it in production.")
 
 MANAGER_ROLES = ("admin", "manager")
 ALL_ROLES = ("admin", "manager", "employee", "intern")
@@ -812,10 +807,6 @@ async def request_otp(body: EmailIn):
     user = await db.users.find_one({"email": email})
     if not user or not user.get("active", True):
         raise HTTPException(403, "This email is not approved for CRM access. Contact your admin.")
-    if DEV_MODE:   # no code is created, emailed or checked — the session is issued here
-        await db.users.update_one({"id": user["id"]}, {"$set": {"last_login": now_iso()}})
-        logger.info(f"DEV_MODE login for {email} (OTP skipped)")
-        return {"dev_mode": True, "token": create_token(user["id"], user["email"]), "user": clean(user)}
     # rate limit: max 5 in 10 min
     since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     recent = await db.otps.count_documents({"email": email, "created_at": {"$gte": since}})
@@ -827,10 +818,7 @@ async def request_otp(body: EmailIn):
                               "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
                               "used": False, "created_at": now_iso()})
     sent = await send_otp_email(email, code)
-    if OTP_DEV_MODE:
-        logger.info(f"OTP for {email}: {code} (emailed={sent})")
-        return {"sent": True, "email": email, "dev_otp": code, "dev_mode": True}
-    # Production: the code is only ever delivered by email — never in the response or logs.
+    # The code is only ever delivered by email — never in the response or logs.
     logger.info(f"OTP requested for {email} (emailed={sent})")
     if not sent:
         raise HTTPException(503, "We couldn't send your login code right now. Please try again in a few minutes.")
@@ -852,7 +840,9 @@ async def verify_otp(body: VerifyIn):
     await db.otp_failures.delete_many({"email": email})
     if rec["expires_at"] < now_iso():
         raise HTTPException(400, "Code expired. Please request a new one.")
-    await db.otps.update_one({"id": rec["id"]}, {"$set": {"used": True}})
+    # Atomic claim: a code can only be redeemed once, even by concurrent requests.
+    if not await db.otps.find_one_and_update({"id": rec["id"], "used": False}, {"$set": {"used": True}}):
+        raise HTTPException(400, "Invalid code. Please check and try again.")
     user = await db.users.find_one({"email": email})
     if not user or not user.get("active", True):
         raise HTTPException(403, "Account not active.")

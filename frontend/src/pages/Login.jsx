@@ -15,7 +15,6 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
-  const [devOtp, setDevOtp] = useState("");
 
   // Set by the API client when a session ends mid-use (expired, revoked or deactivated).
   const [expired] = useState(() => !!new URLSearchParams(window.location.search).get("expired"));
@@ -25,11 +24,9 @@ export default function Login() {
     if (!email) return;
     setBusy(true);
     try {
-      const res = await requestOtp(email.trim());
-      if (res.token) { toast.success("Signed in (dev mode — OTP skipped)"); navigate("/dashboard"); return; }
+      await requestOtp(email.trim());
       setStep("otp");
-      if (res.dev_otp) { setDevOtp(res.dev_otp); toast.info(`Dev OTP: ${res.dev_otp}`); }
-      else toast.success("Code sent to your email");
+      toast.success("Code sent to your email");
     } catch (err) { toast.error(apiError(err)); } finally { setBusy(false); }
   };
 
@@ -72,7 +69,6 @@ export default function Login() {
           <form onSubmit={verify} className="w-full max-w-sm space-y-5">
             <button type="button" onClick={() => { setStep("email"); setOtp(""); }} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft size={14} /> Back</button>
             <div><h2 className="text-2xl font-bold text-slate-900">Enter code</h2><p className="text-sm text-slate-500">We sent a 6-digit code to <b>{email}</b></p></div>
-            {devOtp && <div className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-2">Dev mode code: <b>{devOtp}</b></div>}
             <div><Label>One-time code</Label><Input data-testid="otp-input" inputMode="numeric" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} placeholder="123456" className="tracking-[0.5em] text-center text-lg" required /></div>
             <Button data-testid="verify-otp-btn" type="submit" className="w-full" disabled={busy || otp.length < 6}>{busy ? "Verifying…" : "Verify & sign in"}</Button>
             <button type="button" data-testid="resend-otp-btn" onClick={sendOtp} className="text-sm text-primary hover:underline w-full text-center">Resend code</button>

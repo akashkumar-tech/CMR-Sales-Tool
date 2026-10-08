@@ -37,8 +37,6 @@ saved & shared filter views, duplicate prevention (normalized phone/email/IG/Lin
 | `EMERGENT_EMAIL_KEY` | Managed email (Resend) proxy key — see Email below |
 | `EMAIL_FROM_NAME` | Sender display name (e.g. `Beet.Health`) |
 | `APP_URL` | Public app URL used in email deep-links |
-| `OTP_DEV_MODE` | `true` shows the OTP on screen/response (preview only). **Set `false` in production** — then the code is only emailed, and a failed send returns an error. |
-| `DEV_MODE` | `true` skips email OTP verification: an approved, active email signs in straight away (no code is created or sent). Missing = `false`. **Local only — never enable on a public deployment.** |
 | `APPROVED_EMAIL_DOMAIN` | Only emails at this domain can be added as staff (e.g. `beet.health`; empty = any) |
 | `APP_TIMEZONE` | Team time zone for "today", report periods and the 08:00 reminder (default `Asia/Kolkata`) |
 
@@ -72,7 +70,7 @@ Settings → Team Members. See `memory/test_credentials.md` for login details.
 
 ## Production deployment (Beet.Health tech team)
 1. Provision host, a **MongoDB** instance, and domain/DNS.
-2. Set all backend `.env` values above; set `OTP_DEV_MODE=false`.
+2. Set all backend `.env` values above.
 3. Set `REACT_APP_BACKEND_URL` to the public backend URL; build the frontend.
 4. First boot seeds the admin from `ADMIN_EMAIL`; log in via OTP and create staff.
 5. Use "Save to GitHub" to own the repository.
